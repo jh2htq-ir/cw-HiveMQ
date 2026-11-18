@@ -44,37 +44,8 @@
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
 
-    .info { color: #888888; font-size: 13px; margin-bottom: 10px; width: 100%; max-width: 600px; box-sizing: border-box; }
+    .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; }
     
-    /* マイクアイコンや音声バーを出さない、キー入力専用のクリーンなフォーカスエリア */
-    .paddle-focus-box {
-      width: 100%;
-      max-width: 600px;
-      margin-bottom: 12px;
-      box-sizing: border-box;
-    }
-    #paddleFocusArea {
-      width: 100%;
-      background-color: #1a1a1a;
-      color: #00FF00;
-      border: 2px solid #00FF00;
-      border-radius: 6px;
-      padding: 12px;
-      font-family: 'Courier New', Courier, monospace;
-      font-size: 14px;
-      text-align: center;
-      box-sizing: border-box;
-      outline: none;
-      cursor: pointer;
-      user-select: none;
-      -webkit-user-select: none;
-    }
-    #paddleFocusArea:focus {
-      background-color: #0a220a;
-      border-color: #00FF00;
-      box-shadow: 0 0 8px #00FF00;
-    }
-
     #monitor { 
       background-color: #000000; 
       border: 12px solid #333333; 
@@ -82,7 +53,7 @@
       padding: 12px; 
       width: 100%; 
       max-width: 600px; 
-      height: 220px; 
+      height: 240px; 
       font-size: 18px; 
       line-height: 1.2; 
       overflow-y: scroll; 
@@ -108,26 +79,20 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ iPad USB Paddle ]</h3>
+    <h3>Morse TRX [ iPad Direct ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Use your USB Paddle Interface (Sends Left Ctrl key). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
-  <!-- 音声バーやマイクが出ない、カスタムフォーカス受信用エリア（タブ移動等でキーを確実に捕捉） -->
-  <div class="paddle-focus-box">
-    <div id="paddleFocusArea" tabindex="0">🔌 ここを1回タップしてパドル入力を有効化してください</div>
-  </div>
-
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
   <script>
-    // --- ESP32側およびパドル設定と同期したパラメータ ---
-    const MACHINE_ID = "iPad1"; 
+    const MACHINE_ID = "iPad1"; // ※ESP32側と重複しないID
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -181,6 +146,7 @@
     let ctx = null;
     let isMuted = true; 
 
+    // iOS対策を強化した確実なオーディオ初期化関数
     function initAudio() {
       if (!ctx) {
         ctx = new AudioContext();
@@ -195,19 +161,21 @@
       initAudio();
       if (!ctx) return;
 
+      // オシレータの作成と接続（毎回新しく生成して確実に鳴らす）
       try {
         let osc = ctx.createOscillator();
         let gainNode = ctx.createGain();
         
         osc.type = 'sine';
         osc.frequency.value = 700; 
-        gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
+        
+        gainNode.gain.setValueAtTime(0.2, ctx.currentTime); // 音量調整（大きすぎないよう適度に設定）
 
         osc.connect(gainNode);
         gainNode.connect(ctx.destination);
         
         osc.start();
-        window._activeOsc = osc;
+        window._activeOsc = osc; // 保持
       } catch(e) {
         console.error("Tone start error:", e);
       }
@@ -236,6 +204,11 @@
         toggleSoundBtn.classList.remove('muted');
       }
     });
+
+    // 画面のどこかを最初にタッチしたときにもオーディオコンテキストを強制起動
+    window.addEventListener('pointerdown', () => {
+      initAudio();
+    }, {once: true});
 
     // --- モニタークリア機能 ---
     const clearBtn = document.getElementById('clearBtn');
@@ -384,23 +357,15 @@
     }, 10);
 
     let keyIsDown = false;
-    const paddleFocusArea = document.getElementById('paddleFocusArea');
 
-    // タップされたらフォーカスを保持し、メッセージを更新
-    paddleFocusArea.addEventListener('click', () => {
-      paddleFocusArea.focus();
-      paddleFocusArea.textContent = "🟢 パドル入力有効中（常時受付中）";
-    });
-
-    // 共通の打鍵処理
-    function handleKeyDown(e) {
+    window.addEventListener('keydown', (e) => {
       if (e.code === 'ControlLeft') {
         e.preventDefault(); 
         if (e.repeat || keyIsDown) return;
         keyIsDown = true;
         isTransmitting = true;
 
-        initAudio();
+        initAudio(); // 打鍵時にも確実にオーディオコンテキストを有効化
 
         let currentTime = Date.now();
         let duration = currentTime - lastStateChangeTime;
@@ -415,9 +380,9 @@
         gapAdded = false;
         lastStateChangeTime = currentTime;
       }
-    }
+    });
 
-    function handleKeyUp(e) {
+    window.addEventListener('keyup', (e) => {
       if (e.code === 'ControlLeft') {
         keyIsDown = false;
         stopTone();
@@ -441,13 +406,7 @@
         lastStateChangeTime = currentTime;
         isTransmitting = false;
       }
-    }
-
-    // どのレイヤーでもキー入力を確実にキャッチ
-    paddleFocusArea.addEventListener('keydown', handleKeyDown);
-    paddleFocusArea.addEventListener('keyup', handleKeyUp);
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
+    });
   </script>
 </body>
 </html>
