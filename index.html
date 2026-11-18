@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (Simple Duration Keyer + Remote Sound)</title>
+  <title>CW リアルタイム・モールス通信モニター (Fast Sound Mode)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
@@ -43,9 +43,9 @@
       background-color: #1a1a1a;
       color: #00FF00;
       border: 2px solid #00FF00;
-      border-radius: 12px;
-      padding: 50px 0;
-      font-size: 26px;
+      border-radius: 8px;
+      padding: 40px 0;
+      font-size: 22px;
       font-weight: bold;
       text-align: center;
       cursor: pointer;
@@ -65,7 +65,7 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ Direct Duration Mode ]</h3>
+    <h3>Morse TRX [ Fast Sound Mode ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
@@ -236,62 +236,24 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 受信音を順番に再生するためのキュー処理 ---
-    let soundQueue = [];
-    let isPlayingQueue = false;
-
-    function playReceiveToneSequence(durations, callback) {
-      soundQueue.push({ durations, callback });
-      processSoundQueue();
+    // --- 受信したモールス符号（. と -）をサクサク再生する高速サウンド関数 ---
+    async function playSymbolTone(symbol) {
+      if (isMuted) return;
+      let duration = (symbol === ".") ? DOT_TIME : DASH_TIME;
+      startTone();
+      await new Promise(resolve => setTimeout(resolve, duration));
+      stopTone();
+      // 符号間の短いウェイト
+      await new Promise(resolve => setTimeout(resolve, DOT_TIME));
     }
 
-    function processSoundQueue() {
-      if (isPlayingQueue || soundQueue.length === 0) return;
-      isPlayingQueue = true;
-
-      let item = soundQueue.shift();
-      let durations = item.durations;
-      let index = 0;
-
-      function step() {
-        if (index >= durations.length) {
-          stopTone();
-          isPlayingQueue = false;
-          if (item.callback) item.callback();
-          setTimeout(processSoundQueue, 10);
-          return;
-        }
-
-        let dur = durations[index];
-        if (isNaN(dur)) {
-          index++;
-          step();
-          return;
-        }
-
-        if (index % 2 === 0) {
-          // 信号音（短点または長点）
-          startTone();
-          setTimeout(() => {
-            stopTone();
-            index++;
-            // 音符間のインターバル（1短点分）
-            setTimeout(step, DOT_TIME);
-          }, dur);
-        } else {
-          // 無音スペース
-          stopTone();
-          setTimeout(() => {
-            index++;
-            step();
-          }, dur);
-        }
+    async function playCodeSequence(codeStr) {
+      for (let i = 0; i < codeStr.length; i++) {
+        await playSymbolTone(codeStr[i]);
       }
-
-      step();
     }
 
-    // --- 他局からのMQTTメッセージ受信処理（受信音の追加） ---
+    // --- 他局からのMQTTメッセージ受信処理 ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
@@ -316,21 +278,22 @@
         }
 
         let vals = dataPart.split(',');
-        let numericDurations = [];
         let remoteCode = "";
 
         for (let i = 0; i < vals.length; i++) {
           let dur = parseInt(vals[i]);
           if (isNaN(dur)) continue;
-          numericDurations.push(dur);
 
           if (i % 2 === 0) {
-            if (dur < THRESHOLD) remoteCode += ".";
-            else remoteCode += "-";
+            let symbol = (dur < THRESHOLD) ? "." : "-";
+            remoteCode += symbol;
           } else {
             if (dur >= LETTER_GAP && remoteCode.length > 0) {
               let ch = morseTable[remoteCode];
-              if (ch) updateMonitor(ch);
+              if (ch) {
+                updateMonitor(ch);
+                playCodeSequence(remoteCode); // 受信した符号に合わせて音を鳴らす
+              }
               remoteCode = "";
             }
             if (dur >= WORD_GAP) {
@@ -342,12 +305,10 @@
         }
         if (remoteCode.length > 0) {
           let ch = morseTable[remoteCode];
-          if (ch) updateMonitor(ch);
-        }
-
-        // 受信したデュレーションデータに合わせてサイドトーンを再生する
-        if (numericDurations.length > 0) {
-          playReceiveToneSequence(numericDurations);
+          if (ch) {
+            updateMonitor(ch);
+            playCodeSequence(remoteCode);
+          }
         }
       });
     }
