@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (13 WPM + Paddle Reverse)</title>
+  <title>CW リアルタイム・モールス通信モニター (Simple Duration Keyer)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
     .header-container { display: flex; align-items: center; justify-content: space-between; max-width: 600px; margin-bottom: 5px; flex-wrap: wrap; gap: 10px; }
     h3 { color: #FFFFFF; margin: 0; }
     
-    .header-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+    .header-buttons { display: flex; gap: 8px; }
 
     .action-btn {
       background-color: #222;
@@ -26,29 +26,27 @@
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
     .clear-btn:hover { border-color: #FFAA00; background-color: #332200; }
-    .reverse-btn { color: #00FFFF; border-color: #006666; }
-    .reverse-btn.reversed { background-color: #004444; color: #FFFF00; border-color: #FFFF00; }
 
     .info { color: #888888; font-size: 14px; margin-bottom: 15px; }
     #monitor { background-color: #000000; border: 15px solid #333333; border-radius: 8px; padding: 15px; width: 100%; max-width: 600px; height: 220px; font-size: 20px; line-height: 1.2; overflow-y: scroll; white-space: pre-wrap; word-wrap: break-word; box-shadow: inset 0 0 10px #00FF00; box-sizing: border-box; }
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
     #status { margin-top: 15px; font-size: 16px; color: #FFFF00; }
 
-    .paddle-container {
+    /* 画面いっぱいの大きなパドルボタン */
+    .key-container {
       display: flex;
-      gap: 15px;
       width: 100%;
       max-width: 600px;
       margin-top: 20px;
     }
-    .paddle-btn {
+    .key-btn {
       flex: 1;
       background-color: #1a1a1a;
       color: #00FF00;
       border: 2px solid #00FF00;
       border-radius: 12px;
-      padding: 30px 0;
-      font-size: 24px;
+      padding: 50px 0;
+      font-size: 26px;
       font-weight: bold;
       text-align: center;
       cursor: pointer;
@@ -57,7 +55,7 @@
       touch-action: manipulation;
       box-shadow: 0 4px 6px rgba(0,0,0,0.4);
     }
-    .paddle-btn.touched {
+    .key-btn.touched {
       background-color: #00FF00;
       color: #000000;
     }
@@ -68,22 +66,21 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ 13 WPM / Reverse ]</h3>
+    <h3>Morse TRX [ Direct Duration Mode ]</h3>
     <div class="header-buttons">
-      <button id="reverseBtn" class="action-btn reverse-btn">🔄 Paddle: Normal</button>
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">Speed: ~13 WPM. Use Paddle Reverse switch if needed. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Touch/Click & Hold key below (Short=Dit, Long=Dah). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
-  <div class="paddle-container">
-    <div id="leftPaddleBtn" class="paddle-btn">· DIT</div>
-    <div id="rightPaddleBtn" class="paddle-btn">- DASH</div>
+  <!-- シンプルな単一のキーボタン -->
+  <div class="key-container">
+    <div id="keyBtn" class="key-btn">KEY (TOUCH / CLICK)</div>
   </div>
 
   <script>
@@ -100,30 +97,14 @@
     };
     const TOPIC_TX_RX = "cw/trx/durations"; 
 
-    // --- 13 WPM 設定 (1.200 / 13 ≒ 92ms) ---
+    // --- 13 WPM 設定 ---
     const DOT_TIME = 92; 
     const DASH_TIME = DOT_TIME * 3;     
     const LETTER_GAP = DOT_TIME * 3;    
     const WORD_GAP = DOT_TIME * 7;      
 
-    // パドル反転フラグ
-    let isPaddleReversed = false;
-
-    const reverseBtn = document.getElementById('reverseBtn');
-    reverseBtn.addEventListener('click', () => {
-      isPaddleReversed = !isPaddleReversed;
-      if (isPaddleReversed) {
-        reverseBtn.textContent = "🔄 Paddle: Reversed";
-        reverseBtn.classList.add('reversed');
-        leftPaddleBtn.innerHTML = "- DASH";
-        rightPaddleBtn.innerHTML = "· DIT";
-      } else {
-        reverseBtn.textContent = "🔄 Paddle: Normal";
-        reverseBtn.classList.remove('reversed');
-        leftPaddleBtn.innerHTML = "· DIT";
-        rightPaddleBtn.innerHTML = "- DASH";
-      }
-    });
+    // 短点と長点の判定しきい値（短点と長点の中間値）
+    const THRESHOLD = (DOT_TIME + DASH_TIME) / 2;
 
     const connStatusEl = document.getElementById('connStatus');
 
@@ -288,7 +269,7 @@
           let dur = parseInt(vals[i]);
           if (isNaN(dur)) continue;
           if (i % 2 === 0) {
-            if (dur < (DASH_TIME - (DOT_TIME / 2))) remoteCode += ".";
+            if (dur < THRESHOLD) remoteCode += ".";
             else remoteCode += "-";
           } else {
             if (dur >= LETTER_GAP && remoteCode.length > 0) {
@@ -350,6 +331,48 @@
       }
     }, 10);
 
+    // --- 共通の打鍵処理（押した時間の長さで判定） ---
+    function handlePressStart() {
+      if (isTransmitting) return;
+      isTransmitting = true;
+
+      let currentTime = Date.now();
+      let duration = currentTime - lastStateChangeTime;
+
+      if (duration >= 10 && durationHistory.length > 0) {
+        durationHistory += "," + duration;
+      }
+
+      startTone();
+      signalStartTime = currentTime;
+      silenceStartTime = 0;
+      gapAdded = false;
+      lastStateChangeTime = currentTime;
+    }
+
+    function handlePressEnd() {
+      if (!isTransmitting) return;
+      stopTone();
+      let currentTime = Date.now();
+      let duration = currentTime - signalStartTime;
+      silenceStartTime = currentTime;
+
+      // 押していた時間に基づいて短点か長点を自動判定
+      let symbol = duration < THRESHOLD ? "." : "-";
+
+      currentCode += symbol;
+      if (currentCode.length > 6) currentCode = "";
+      currentCodeEl.textContent = currentCode;
+
+      if (duration >= 10) {
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += duration;
+      }
+
+      lastStateChangeTime = currentTime;
+      isTransmitting = false;
+    }
+
     // --- キーボード（Left Ctrl）の処理 ---
     let keyIsDown = false;
     window.addEventListener('keydown', (e) => {
@@ -357,146 +380,53 @@
         e.preventDefault(); 
         if (e.repeat || keyIsDown) return;
         keyIsDown = true;
-        isTransmitting = true;
-        let currentTime = Date.now();
-        let duration = currentTime - lastStateChangeTime;
-        if (duration >= 10 && durationHistory.length > 0) {
-          durationHistory += "," + duration;
-        }
-        startTone();
-        signalStartTime = currentTime;
-        silenceStartTime = 0;
-        gapAdded = false;
-        lastStateChangeTime = currentTime;
+        handlePressStart();
       }
     });
 
     window.addEventListener('keyup', (e) => {
       if (e.code === 'ControlLeft') {
         keyIsDown = false;
-        stopTone();
-        let currentTime = Date.now();
-        let duration = currentTime - signalStartTime;
-        silenceStartTime = currentTime;
-
-        let threshold = (DOT_TIME + DASH_TIME) / 2;
-        let symbol = duration < threshold ? "." : "-";
-
-        currentCode += symbol;
-        if (currentCode.length > 6) currentCode = "";
-        currentCodeEl.textContent = currentCode;
-
-        if (duration >= 10) {
-          if (durationHistory.length > 0) durationHistory += ",";
-          durationHistory += duration;
-        }
-        lastStateChangeTime = currentTime;
-        isTransmitting = false;
+        handlePressEnd();
       }
     });
 
-    // --- エレクトロニック・キーヤー（自動連打エンジン） ---
-    let leftPressed = false;
-    let rightPressed = false;
-    let keyerRunning = false;
+    // --- 画面上のキーボタン設定 ---
+    const keyBtn = document.getElementById('keyBtn');
 
-    async function runKeyer() {
-      if (keyerRunning) return;
-      keyerRunning = true;
+    keyBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      initAudio();
+      keyBtn.classList.add('touched');
+      handlePressStart();
+    });
 
-      while (leftPressed || rightPressed) {
-        let symbol = "";
-        let duration = 0;
+    keyBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      keyBtn.classList.remove('touched');
+      handlePressEnd();
+    });
 
-        // ノーマル時: 左=DOT, 右=DASH
-        // リバース時: 左=DASH, 右=DOT
-        let activeDot = isPaddleReversed ? rightPressed : leftPressed;
-        let activeDash = isPaddleReversed ? leftPressed : rightPressed;
+    keyBtn.addEventListener('touchcancel', (e) => {
+      e.preventDefault();
+      keyBtn.classList.remove('touched');
+      handlePressEnd();
+    });
 
-        if (activeDot) {
-          symbol = ".";
-          duration = DOT_TIME;
-        } else if (activeDash) {
-          symbol = "-";
-          duration = DASH_TIME;
-        } else {
-          break;
-        }
+    keyBtn.addEventListener('mousedown', () => {
+      initAudio();
+      handlePressStart();
+    });
 
-        let currentTime = Date.now();
-        let gap = currentTime - lastStateChangeTime;
-        if (gap >= 10 && durationHistory.length > 0) {
-          durationHistory += "," + gap;
-        }
+    keyBtn.addEventListener('mouseup', () => {
+      handlePressEnd();
+    });
 
-        startTone();
-        isTransmitting = true;
-        signalStartTime = currentTime;
-        silenceStartTime = 0;
-        gapAdded = false;
-        lastStateChangeTime = currentTime;
-
-        await new Promise(resolve => setTimeout(resolve, duration));
-
-        stopTone();
-        currentTime = Date.now();
-        silenceStartTime = currentTime;
-
-        currentCode += symbol;
-        if (currentCode.length > 6) currentCode = "";
-        currentCodeEl.textContent = currentCode;
-
-        if (duration >= 10) {
-          if (durationHistory.length > 0) durationHistory += ",";
-          durationHistory += duration;
-        }
-        lastStateChangeTime = currentTime;
-        isTransmitting = false;
-
-        await new Promise(resolve => setTimeout(resolve, DOT_TIME));
+    keyBtn.addEventListener('mouseleave', () => {
+      if (isTransmitting) {
+        handlePressEnd();
       }
-
-      keyerRunning = false;
-    }
-
-    // --- パドルボタンの設定 ---
-    const leftPaddleBtn = document.getElementById('leftPaddleBtn');
-    const rightPaddleBtn = document.getElementById('rightPaddleBtn');
-
-    function setupPaddle(btn, isLeft) {
-      const startHandler = (e) => {
-        if (e) e.preventDefault();
-        initAudio();
-        btn.classList.add('touched');
-        if (isLeft) {
-          leftPressed = true;
-        } else {
-          rightPressed = true;
-        }
-        runKeyer();
-      };
-
-      const endHandler = (e) => {
-        if (e) e.preventDefault();
-        btn.classList.remove('touched');
-        if (isLeft) {
-          leftPressed = false;
-        } else {
-          rightPressed = false;
-        }
-      };
-
-      btn.addEventListener('touchstart', startHandler);
-      btn.addEventListener('touchend', endHandler);
-      btn.addEventListener('touchcancel', endHandler);
-
-      btn.addEventListener('mousedown', startHandler);
-      btn.addEventListener('mouseup', endHandler);
-      btn.addEventListener('mouseleave', endHandler);
-    }
-
-    setupPaddle(leftPaddleBtn, true);   // 左ボタン
-    setupPaddle(rightPaddleBtn, false); // 右ボタン
+    });
   </script>
 </body>
 </html>
