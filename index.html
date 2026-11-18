@@ -43,7 +43,6 @@
     .action-btn:active { background-color: #444; }
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
-    .clear-btn:hover { border-color: #FFAA00; background-color: #332200; }
 
     .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; }
     
@@ -93,9 +92,7 @@
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
   <script>
-    // --- ESP32側およびパドル設定と同期したパラメータ ---
-    // ※ESP32側や他の端末と重複しないID（例: iPad1など）を設定してください
-    const MACHINE_ID = "iPad1"; 
+    const MACHINE_ID = "iPad1"; // ※ESP32側と重複しないID
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -147,29 +144,50 @@
     // --- Web Audio API (SideTone: 700Hz) ---
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     let ctx = null;
-    let osc = null;
     let isMuted = true; 
 
+    // iOS対策を強化した確実なオーディオ初期化関数
     function initAudio() {
-      if (!ctx) ctx = new AudioContext();
-      if (ctx.state === 'suspended') ctx.resume();
+      if (!ctx) {
+        ctx = new AudioContext();
+      }
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
     }
 
     function startTone() {
       if (isMuted) return;
       initAudio();
-      if (!osc) {
-        osc = ctx.createOscillator(); 
+      if (!ctx) return;
+
+      // オシレータの作成と接続（毎回新しく生成して確実に鳴らす）
+      try {
+        let osc = ctx.createOscillator();
+        let gainNode = ctx.createGain();
+        
+        osc.type = 'sine';
         osc.frequency.value = 700; 
-        osc.connect(ctx.destination); 
+        
+        gainNode.gain.setValueAtTime(0.2, ctx.currentTime); // 音量調整（大きすぎないよう適度に設定）
+
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        
         osc.start();
+        window._activeOsc = osc; // 保持
+      } catch(e) {
+        console.error("Tone start error:", e);
       }
     }
     
     function stopTone() {
-      if (osc) { 
-        try { osc.stop(); } catch(e){} 
-        osc = null; 
+      if (window._activeOsc) {
+        try {
+          window._activeOsc.stop();
+          window._activeOsc.disconnect();
+        } catch(e){}
+        window._activeOsc = null;
       }
     }
 
@@ -187,7 +205,12 @@
       }
     });
 
-    // --- モニタークリア機能の追加 ---
+    // 画面のどこかを最初にタッチしたときにもオーディオコンテキストを強制起動
+    window.addEventListener('pointerdown', () => {
+      initAudio();
+    }, {once: true});
+
+    // --- モニタークリア機能 ---
     const clearBtn = document.getElementById('clearBtn');
     clearBtn.addEventListener('click', () => {
       decodedText = "";
@@ -342,7 +365,8 @@
         keyIsDown = true;
         isTransmitting = true;
 
-        initAudio(); // iPadでの音声出力有効化
+        initAudio(); // 打鍵時にも確実にオーディオコンテキストを有効化
+
         let currentTime = Date.now();
         let duration = currentTime - lastStateChangeTime;
 
@@ -383,11 +407,6 @@
         isTransmitting = false;
       }
     });
-
-    // --- iPadOS/iOS対策: 画面上のどこかを最初に一度タッチした時点でオーディオとフォーカスをアクティブ化 ---
-    window.addEventListener('touchstart', () => {
-      initAudio();
-    }, {once: true});
   </script>
 </body>
 </html>
