@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>CW モールス通信モニター (iPad / HiveMQ)</title>
+  <style>
+    body { 
+      background-color: #121212; 
+      color: #00FF00; 
+      font-family: 'Courier New', Courier, monospace; 
+      padding: 15px; 
+      margin: 0; 
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      touch-action: manipulation;
+    }
+    
+    .header-container { 
+      display: flex; 
+      align-items: center; 
+      justify-content: space-between; 
+      width: 100%; 
+      max-width: 600px; 
+      margin-bottom: 5px; 
+      box-sizing: border-box;
+    }
+    h3 { color: #FFFFFF; margin: 0; font-size: 18px; }
+    
+    .header-buttons { display: flex; gap: 8px; }
+
+    .action-btn {
+      background-color: #222;
+      color: #00FF00;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 6px 12px;
+      cursor: pointer;
+      font-size: 14px;
+      user-select: none;
+    }
+    .action-btn:active { background-color: #444; }
+    .action-btn.muted { color: #FF4444; border-color: #FF4444; }
+    .clear-btn { color: #FFAA00; border-color: #664400; }
+
+    .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; }
+    
+    #monitor { 
+      background-color: #000000; 
+      border: 12px solid #333333; 
+      border-radius: 8px; 
+      padding: 12px; 
+      width: 100%; 
+      max-width: 600px; 
+      height: 220px; 
+      font-size: 18px; 
+      line-height: 1.2; 
+      overflow-y: scroll; 
+      white-space: pre-wrap; 
+      word-wrap: break-word; 
+      box-shadow: inset 0 0 10px #00FF00; 
+      box-sizing: border-box; 
+    }
+    #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
+    
+    #status { 
+      margin-top: 12px; 
+      font-size: 15px; 
+      color: #FFFF00; 
+      width: 100%; 
+      max-width: 600px; 
+      box-sizing: border-box; 
+    }
+
+    /* タッチ用パドルボタンエリア（iPad画面用） */
+    .touch-paddle-container {
+      display: flex;
+      gap: 15px;
+      width: 100%;
+      max-width: 600px;
+      margin-top: 15px;
+      box-sizing: border-box;
+    }
+    .paddle-btn {
+      flex: 1;
+      background-color: #1a1a1a;
+      color: #00FF00;
+      border: 2px solid #00FF00;
+      border-radius: 8px;
+      padding: 20px 0;
+      font-size: 20px;
+      font-weight: bold;
+      text-align: center;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+    .paddle-btn:active {
+      background-color: #00FF00;
+      color: #000000;
+    }
+  </style>
+  <!-- MQTT.js (WebSockets対応版) -->
+  <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+</head>
+<body>
+
+  <div class="header-container">
+    <h3>Morse TRX [ iPad Direct ]</h3>
+    <div class="header-buttons">
+      <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
+      <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
+    </div>
+  </div>
+  
+  <div class="info">USB Paddle (Ctrl) or Touch Buttons below. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  
+  <div id="monitor"></div>
+  <div id="status">Transmitting... <span id="currentCode"></span></div>
+
+  <!-- タッチ操作用のパドルボタン（iPad画面タッチ用） -->
+  <div class="touch-paddle-container">
+    <div id="dotBtn" class="paddle-btn">・ (DOT)</div>
+    <div id="dashBtn" class="paddle-btn">− (DASH)</div>
+  </div>
+
+  <script>
+    // --- iPad用設定 (マシンIDはPC1など重複しないIDに変更してください) ---
+    const MACHINE_ID = "iPad1"; 
+    
+    const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
+    const mqttOptions = {
+      clientId: "Browser_iPad_" + Math.random().toString(16).substring(2, 8),
+      username: "RadioHIKAMI",
+      password: "4598001a",
+      clean: true,
+      reconnectPeriod: 3000,
+      connectTimeout: 10000
+    };
+    const TOPIC_TX_RX = "cw/trx/durations"; 
+
+    const DOT_TIME = 50; 
+    const DASH_TIME = DOT_TIME * 3;     
+    const LETTER_GAP = DOT_TIME * 3;    
+    const WORD_GAP = DOT_TIME * 7;      
+
+    const connStatusEl = document.getElementById('connStatus');
+
+    let client;
+    try {
+      client = mqtt.connect(mqttServer, mqttOptions);
+    } catch (e) {
+      console.error("MQTT Connect Exception: ", e);
+      connStatusEl.textContent = "Init Error";
+      connStatusEl.style.color = "#FF4444";
+    }
+
+    if (client) {
+      client.on('connect', () => {
+        connStatusEl.textContent = "Connected";
+        connStatusEl.style.color = "#00FF00";
+        client.subscribe(TOPIC_TX_RX, (err) => {
+          if (err) console.error("Subscription Error: ", err);
+        });
+      });
+
+      client.on('error', (err) => {
+        connStatusEl.textContent = "Connection Error";
+        connStatusEl.style.color = "#FF4444";
+      });
+
+      client.on('offline', () => {
+        connStatusEl.textContent = "Disconnected / Reconnecting...";
+        connStatusEl.style.color = "#FFAA00";
+      });
+    }
+
+    // --- Web Audio API (SideTone: 700Hz) ---
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    let ctx = null;
+    let osc = null;
+    let isMuted = true; 
+
+    function initAudio() {
+      if (!ctx) {
+        ctx = new AudioContext();
+      }
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+    }
+
+    function startTone() {
+      if (isMuted) return;
+      initAudio();
+      if (!osc) {
+        osc = ctx.createOscillator(); 
+        osc.frequency.value = 700; 
+        osc.connect(ctx.destination); 
+        osc.start();
+      }
+    }
+    
+    function stopTone() {
+      if (osc) { 
+        try { osc.stop(); } catch(e){} 
+        osc = null; 
+      }
+    }
+
+    const toggleSoundBtn = document.getElementById('toggleSoundBtn');
+    toggleSoundBtn.addEventListener('click', () => {
+      initAudio();
+      isMuted = !isMuted;
+      if (isMuted) {
+        toggleSoundBtn.textContent = "🔇 Sound: OFF";
+        toggleSoundBtn.classList.add('muted');
+        stopTone();
+      } else {
+        toggleSoundBtn.textContent = "🔊 Sound: ON";
+        toggleSoundBtn.classList.remove('muted');
+      }
+    });
+
+    // --- モニタークリア機能 ---
+    const clearBtn = document.getElementById('clearBtn');
+    clearBtn.addEventListener('click', () => {
+      decodedText = "";
+      monitorEl.textContent = "";
+      currentCode = "";
+      currentCodeEl.textContent = "";
+    });
+
+    // --- モールス信号・デコード設定 ---
+    let estimatedDotTime = DOT_TIME;   
+    let estimatedDashTime = DASH_TIME; 
+
+    const morseTable = {
+      ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z", ".----": "1", "..---": "2", "...--": "3", "....-": "4", ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9", "-----": "0", ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/", ".--.-.": "@", "-....-": "-", "-...-": "=", ".-.-.": "+", "...-.-": ";"
+    };
+
+    let signalStartTime = 0; 
+    let silenceStartTime = 0; 
+    let currentCode = ""; 
+    let decodedText = ""; 
+    let gapAdded = false;
+    let durationHistory = "";
+    let lastStateChangeTime = Date.now();
+    let isTransmitting = false;
+
+    const monitorEl = document.getElementById('monitor'); 
+    const currentCodeEl = document.getElementById('currentCode');
+    
+    const canvas = document.createElement('canvas'); 
+    const canvasCtx = canvas.getContext('2d');
+    canvasCtx.font = "18px 'Courier New', Courier, monospace";
+
+    function updateMonitor(newChar) {
+      if (newChar === "=") { 
+        decodedText += "=\n"; 
+      } else { 
+        decodedText += newChar; 
+      }
+
+      let lines = decodedText.split('\n'); 
+      let lastLine = lines[lines.length - 1];
+      const maxWidthLimit = (monitorEl.clientWidth - 20) * 0.90;
+
+      if (canvasCtx.measureText(lastLine).width > maxWidthLimit) {
+        lines[lines.length - 1] = "\n" + lastLine;
+        decodedText = lines.join('\n');
+      }
+
+      decodedText = decodedText.replace(/\n\n+/g, '\n');
+      monitorEl.textContent = decodedText;
+      monitorEl.scrollTop = monitorEl.scrollHeight;
+    }
+
+    // --- 他局からのMQTTメッセージ受信処理 ---
+    if (client) {
+      client.on('message', (topic, payload) => {
+        if (topic !== TOPIC_TX_RX) return;
+        let msg = payload.toString();
+        
+        msg = msg.replace("[", "").replace("]", "");
+        let colIdx = msg.indexOf(':');
+        if (colIdx === -1) return;
+
+        let senderID = msg.substring(0, colIdx);
+        let dataPart = msg.substring(colIdx + 1);
+        senderID.trim();
+        dataPart.trim();
+
+        if (senderID === MACHINE_ID) return;
+
+        if (dataPart === "SPACE") {
+          if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
+            updateMonitor(" ");
+          }
+          return;
+        }
+
+        let vals = dataPart.split(',');
+        let remoteCode = "";
+        for (let i = 0; i < vals.length; i++) {
+          let dur = parseInt(vals[i]);
+          if (isNaN(dur)) continue;
+          if (i % 2 === 0) {
+            if (dur < (DASH_TIME - (DOT_TIME / 2))) remoteCode += ".";
+            else remoteCode += "-";
+          } else {
+            if (dur >= LETTER_GAP && remoteCode.length > 0) {
+              let ch = morseTable[remoteCode];
+              if (ch) updateMonitor(ch);
+              remoteCode = "";
+            }
+            if (dur >= WORD_GAP) {
+              if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
+                updateMonitor(" ");
+              }
+            }
+          }
+        }
+        if (remoteCode.length > 0) {
+          let ch = morseTable[remoteCode];
+          if (ch) updateMonitor(ch);
+        }
+      });
+    }
+
+    // --- 自局の打鍵・無音判定ループ ---
+    setInterval(() => {
+      let currentTime = Date.now();
+      let silenceDuration = currentTime - silenceStartTime;
+
+      if (!isTransmitting && currentCode.length > 0 && silenceDuration >= LETTER_GAP) {
+        let char = morseTable[currentCode];
+        if (char) {
+          updateMonitor(char);
+        }
+        currentCode = "";
+        currentCodeEl.textContent = "";
+
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += silenceDuration;
+        let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
+        if (client && client.connected) {
+          client.publish(TOPIC_TX_RX, mqttMessage);
+        }
+        durationHistory = "";
+      }
+
+      if (!isTransmitting && !gapAdded && decodedText.length > 0 && silenceDuration >= WORD_GAP) {
+        if (currentCode.length > 0) {
+          let char = morseTable[currentCode];
+          if (char) updateMonitor(char);
+          currentCode = "";
+          currentCodeEl.textContent = "";
+        }
+        if (!decodedText.endsWith(" ") && !decodedText.endsWith("\n")) {
+          updateMonitor(" ");
+        }
+        gapAdded = true;
+        let spaceMessage = "[" + MACHINE_ID + ":SPACE]";
+        if (client && client.connected) {
+          client.publish(TOPIC_TX_RX, spaceMessage);
+        }
+      }
+    }, 10);
+
+    // --- 打鍵開始・終了の共通処理 ---
+    function handlePressStart() {
+      initAudio();
+      let currentTime = Date.now();
+      let duration = currentTime - lastStateChangeTime;
+
+      if (duration >= 10 && durationHistory.length > 0) {
+        durationHistory += "," + duration;
+      }
+
+      startTone();
+      signalStartTime = currentTime;
+      silenceStartTime = 0;
+      gapAdded = false;
+      lastStateChangeTime = currentTime;
+      isTransmitting = true;
+    }
+
+    function handlePressEnd(symbolType) {
+      stopTone();
+      let currentTime = Date.now();
+      let duration = currentTime - signalStartTime;
+      silenceStartTime = currentTime;
+
+      let symbol = symbolType;
+      if (!symbol) {
+        let threshold = (DOT_TIME + DASH_TIME) / 2;
+        symbol = duration < threshold ? "." : "-";
+      }
+
+      estimatedDotTime = estimatedDotTime * 0.85 + duration * 0.15;
+      currentCode += symbol;
+      if (currentCode.length > 6) currentCode = "";
+      currentCodeEl.textContent = currentCode;
+
+      if (duration >= 10) {
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += duration;
+      }
+
+      lastStateChangeTime = currentTime;
+      isTransmitting = false;
+    }
+
+    // 1. USBパドルインターフェースからのキーボード入力 (Left Ctrl)
+    let keyIsDown = false;
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'ControlLeft') {
+        e.preventDefault(); 
+        if (e.repeat || keyIsDown) return;
+        keyIsDown = true;
+        handlePressStart();
+      }
+    });
+
+    window.addEventListener('keyup', (e) => {
+      if (e.code === 'ControlLeft') {
+        keyIsDown = false;
+        handlePressEnd(null);
+      }
+    });
+
+    // 2. 画面上のタッチ用パドルボタン操作 (iPad画面タッチ)
+    const dotBtn = document.getElementById('dotBtn');
+    const dashBtn = document.getElementById('dashBtn');
+
+    // Dotボタン
+    dotBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
+    dotBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd("."); });
+    dotBtn.addEventListener('mousedown', (e) => { handlePressStart(); });
+    dotBtn.addEventListener('mouseup', (e) => { handlePressEnd("."); });
+
+    // Dashボタン
+    dashBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
+    dashBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd("-"); });
+    dashBtn.addEventListener('mousedown', (e) => { handlePressStart(); });
+    dashBtn.addEventListener('mouseup', (e) => { handlePressEnd("-"); });
+  </script>
+</body>
+</html>
