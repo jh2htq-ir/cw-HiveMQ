@@ -72,27 +72,41 @@
       max-width: 600px; 
       box-sizing: border-box; 
     }
+
+    /* iPad用の隠しフォーカス保持用要素（画面を汚さずにキーを受け付けるため） */
+    #focusTrap {
+      position: absolute;
+      opacity: 0;
+      pointer-events: none;
+      height: 0;
+      width: 0;
+    }
   </style>
   <!-- MQTT.js (WebSockets対応版) -->
   <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 </head>
 <body>
 
+  <!-- iPadで画面に触れていなくてもキー入力を常時トラップするための隠し入力要素 -->
+  <input type="text" id="focusTrap" autocomplete="off" autofocus>
+
   <div class="header-container">
-    <h3>Morse TRX [ iPad Direct ]</h3>
+    <h3>Morse TRX [ iPad USB Paddle ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">Use your USB Paddle Interface (Sends Left Ctrl key). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Use your USB Paddle Interface (Left Ctrl key). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
   <script>
-    const MACHINE_ID = "iPad1"; // ※ESP32側と重複しないID
+    // --- ESP32側およびパドル設定と同期したパラメータ ---
+    // ※ESP32側や他の端末と重複しないIDを設定してください
+    const MACHINE_ID = "iPad1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -146,7 +160,6 @@
     let ctx = null;
     let isMuted = true; 
 
-    // iOS対策を強化した確実なオーディオ初期化関数
     function initAudio() {
       if (!ctx) {
         ctx = new AudioContext();
@@ -161,21 +174,19 @@
       initAudio();
       if (!ctx) return;
 
-      // オシレータの作成と接続（毎回新しく生成して確実に鳴らす）
       try {
         let osc = ctx.createOscillator();
         let gainNode = ctx.createGain();
         
         osc.type = 'sine';
         osc.frequency.value = 700; 
-        
-        gainNode.gain.setValueAtTime(0.2, ctx.currentTime); // 音量調整（大きすぎないよう適度に設定）
+        gainNode.gain.setValueAtTime(0.2, ctx.currentTime);
 
         osc.connect(gainNode);
         gainNode.connect(ctx.destination);
         
         osc.start();
-        window._activeOsc = osc; // 保持
+        window._activeOsc = osc;
       } catch(e) {
         console.error("Tone start error:", e);
       }
@@ -204,11 +215,6 @@
         toggleSoundBtn.classList.remove('muted');
       }
     });
-
-    // 画面のどこかを最初にタッチしたときにもオーディオコンテキストを強制起動
-    window.addEventListener('pointerdown', () => {
-      initAudio();
-    }, {once: true});
 
     // --- モニタークリア機能 ---
     const clearBtn = document.getElementById('clearBtn');
@@ -358,6 +364,20 @@
 
     let keyIsDown = false;
 
+    // --- iPadOS向けフォーカス強制常時維持の仕組み ---
+    const focusTrap = document.getElementById('focusTrap');
+    
+    // ページ全体で常に隠し要素にフォーカスを強制保持させる
+    function ensureFocus() {
+      if (document.activeElement !== focusTrap) {
+        focusTrap.focus();
+      }
+    }
+    
+    window.addEventListener('load', () => { focusTrap.focus(); });
+    window.addEventListener('click', () => { focusTrap.focus(); });
+    setInterval(ensureFocus, 1000); // 1秒ごとにフォーカスを自動で引き戻す
+
     window.addEventListener('keydown', (e) => {
       if (e.code === 'ControlLeft') {
         e.preventDefault(); 
@@ -365,7 +385,7 @@
         keyIsDown = true;
         isTransmitting = true;
 
-        initAudio(); // 打鍵時にも確実にオーディオコンテキストを有効化
+        initAudio(); // 音声コンテキスト有効化
 
         let currentTime = Date.now();
         let duration = currentTime - lastStateChangeTime;
