@@ -2,30 +2,12 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>CW モールス通信モニター (13 WPM Optimized)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CW リアルタイム・モールス通信モニター (HiveMQ + iPad Compatible)</title>
   <style>
-    body { 
-      background-color: #121212; 
-      color: #00FF00; 
-      font-family: 'Courier New', Courier, monospace; 
-      padding: 15px; 
-      margin: 0; 
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      touch-action: manipulation;
-    }
+    body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 15px; margin: 0; box-sizing: border-box; }
     
-    .header-container { 
-      display: flex; 
-      align-items: center; 
-      justify-content: space-between; 
-      width: 100%; 
-      max-width: 600px; 
-      margin-bottom: 5px; 
-      box-sizing: border-box;
-    }
+    .header-container { display: flex; align-items: center; justify-content: space-between; max-width: 600px; margin-bottom: 5px; flex-wrap: wrap; gap: 10px; }
     h3 { color: #FFFFFF; margin: 0; font-size: 18px; }
     
     .header-buttons { display: flex; gap: 8px; }
@@ -40,53 +22,30 @@
       font-size: 14px;
       user-select: none;
     }
-    .action-btn:active { background-color: #444; }
+    .action-btn:hover { border-color: #00FF00; }
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
+    .clear-btn:hover { border-color: #FFAA00; background-color: #332200; }
 
-    .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; }
-    
-    #monitor { 
-      background-color: #000000; 
-      border: 12px solid #333333; 
-      border-radius: 8px; 
-      padding: 12px; 
-      width: 100%; 
-      max-width: 600px; 
-      height: 220px; 
-      font-size: 18px; 
-      line-height: 1.2; 
-      overflow-y: scroll; 
-      white-space: pre-wrap; 
-      word-wrap: break-word; 
-      box-shadow: inset 0 0 10px #00FF00; 
-      box-sizing: border-box; 
-    }
+    .info { color: #888888; font-size: 13px; margin-bottom: 12px; }
+    #monitor { background-color: #000000; border: 12px solid #333333; border-radius: 8px; padding: 12px; width: 100%; max-width: 600px; height: 200px; font-size: 18px; line-height: 1.2; overflow-y: scroll; white-space: pre-wrap; word-wrap: break-word; box-shadow: inset 0 0 10px #00FF00; box-sizing: border-box; }
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
-    
-    #status { 
-      margin-top: 12px; 
-      font-size: 15px; 
-      color: #FFFF00; 
-      width: 100%; 
-      max-width: 600px; 
-      box-sizing: border-box; 
-    }
+    #status { margin-top: 10px; font-size: 15px; color: #FFFF00; }
 
-    .touch-paddle-container {
+    /* iPad用タッチパドルボタンのスタイル */
+    .paddle-container {
       display: flex;
       gap: 15px;
       width: 100%;
       max-width: 600px;
       margin-top: 15px;
-      box-sizing: border-box;
     }
     .paddle-btn {
       flex: 1;
-      background-color: #1a1a1a;
+      background-color: #1e1e1e;
       color: #00FF00;
       border: 2px solid #00FF00;
-      border-radius: 8px;
+      border-radius: 12px;
       padding: 25px 0;
       font-size: 22px;
       font-weight: bold;
@@ -94,36 +53,40 @@
       cursor: pointer;
       user-select: none;
       -webkit-user-select: none;
+      touch-action: manipulation;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
     }
-    .paddle-btn:active, .paddle-btn.touched {
+    .paddle-btn:active {
       background-color: #00FF00;
       color: #000000;
     }
   </style>
+  <!-- MQTT.js (WebSockets対応版) -->
   <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 </head>
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ 13 WPM Optimized ]</h3>
+    <h3>Morse TRX [ iPad / Browser ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">USB Paddle (Ctrl) or Touch Buttons. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Use Left Ctrl (Key) or Touch Buttons below. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
-  <div class="touch-paddle-container">
-    <div id="dotBtn" class="paddle-btn">・ (DOT)</div>
-    <div id="dashBtn" class="paddle-btn">− (DASH)</div>
+  <!-- iPad・スマホ用のオンスクリーンパドルボタン -->
+  <div class="paddle-container">
+    <div id="dotBtn" class="paddle-btn">· (DOT)</div>
+    <div id="dashBtn" class="paddle-btn">- (DASH)</div>
   </div>
 
   <script>
-    const MACHINE_ID = "PC1"; // ※ESP32側と重複しないID
+    const MACHINE_ID = "iPad1"; // 必要に応じてPC1と被らないIDに変更してください
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -136,12 +99,10 @@
     };
     const TOPIC_TX_RX = "cw/trx/durations"; 
 
-    // --- 13 WPM 標準に最適化したタイミング設定 ---
-    // 13 WPMでは短点約92ms、長点約276ms
-    let estimatedDotTime = 92;   
-    let estimatedDashTime = 276; 
-    let LETTER_GAP = 350; // 文字間判定（13WPMに合わせてゆったりめに設定）
-    let WORD_GAP = 800;   // 単語スペース判定
+    const DOT_TIME = 50; 
+    const DASH_TIME = DOT_TIME * 3;     
+    const LETTER_GAP = DOT_TIME * 3;    
+    const WORD_GAP = DOT_TIME * 7;      
 
     const connStatusEl = document.getElementById('connStatus');
 
@@ -181,8 +142,12 @@
     let isMuted = true; 
 
     function initAudio() {
-      if (!ctx) ctx = new AudioContext();
-      if (ctx.state === 'suspended') ctx.resume();
+      if (!ctx) {
+        ctx = new AudioContext();
+      }
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
     }
 
     function startTone() {
@@ -198,7 +163,7 @@
     
     function stopTone() {
       if (osc) { 
-        try { osc.stop(); } catch(e){} 
+        try { osc.stop(); } catch(e){}
         osc = null; 
       }
     }
@@ -225,15 +190,20 @@
       currentCodeEl.textContent = "";
     });
 
+    let estimatedDotTime = DOT_TIME;   
+    let estimatedDashTime = DASH_TIME; 
+
     const morseTable = {
       ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z", ".----": "1", "..---": "2", "...--": "3", "....-": "4", ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9", "-----": "0", ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/", ".--.-.": "@", "-....-": "-", "-...-": "=", ".-.-.": "+", "...-.-": ";"
     };
 
-    let silenceStartTime = Date.now(); 
+    let signalStartTime = 0; 
+    let silenceStartTime = 0; 
     let currentCode = ""; 
     let decodedText = ""; 
     let gapAdded = false;
-    let durationHistory = [];
+    let durationHistory = "";
+    let lastStateChangeTime = Date.now();
     let isTransmitting = false;
 
     const monitorEl = document.getElementById('monitor'); 
@@ -252,7 +222,7 @@
 
       let lines = decodedText.split('\n'); 
       let lastLine = lines[lines.length - 1];
-      const maxWidthLimit = (monitorEl.clientWidth - 20) * 0.90;
+      const maxWidthLimit = (monitorEl.clientWidth - 24) * 0.90;
 
       if (canvasCtx.measureText(lastLine).width > maxWidthLimit) {
         lines[lines.length - 1] = "\n" + lastLine;
@@ -275,8 +245,6 @@
 
         let senderID = msg.substring(0, colIdx);
         let dataPart = msg.substring(colIdx + 1);
-        senderID.trim();
-        dataPart.trim();
 
         if (senderID === MACHINE_ID) return;
 
@@ -289,15 +257,11 @@
 
         let vals = dataPart.split(',');
         let remoteCode = "";
-        let isTone = true;
-
         for (let i = 0; i < vals.length; i++) {
           let dur = parseInt(vals[i]);
-          if (isNaN(dur) || dur <= 0) continue;
-
-          if (isTone) {
-            let threshold = (estimatedDotTime + estimatedDashTime) / 2;
-            if (dur < threshold) remoteCode += ".";
+          if (isNaN(dur)) continue;
+          if (i % 2 === 0) {
+            if (dur < (DASH_TIME - (DOT_TIME / 2))) remoteCode += ".";
             else remoteCode += "-";
           } else {
             if (dur >= LETTER_GAP && remoteCode.length > 0) {
@@ -311,7 +275,6 @@
               }
             }
           }
-          isTone = !isTone;
         }
         if (remoteCode.length > 0) {
           let ch = morseTable[remoteCode];
@@ -320,6 +283,7 @@
       });
     }
 
+    // --- 自局の打鍵・無音判定ループ ---
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
@@ -332,12 +296,13 @@
         currentCode = "";
         currentCodeEl.textContent = "";
 
-        durationHistory.push(silenceDuration);
-        let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory.join(",") + "]";
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += silenceDuration;
+        let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
         if (client && client.connected) {
           client.publish(TOPIC_TX_RX, mqttMessage);
         }
-        durationHistory = [];
+        durationHistory = "";
       }
 
       if (!isTransmitting && !gapAdded && decodedText.length > 0 && silenceDuration >= WORD_GAP) {
@@ -358,59 +323,47 @@
       }
     }, 10);
 
-    function sendSymbol(symbol) {
+    // --- 共通の打鍵開始・終了処理 ---
+    function handlePressStart() {
+      if (isTransmitting) return;
       isTransmitting = true;
-      initAudio();
 
-      let toneDuration = (symbol === ".") ? estimatedDotTime : estimatedDashTime;
-      let silenceBefore = Date.now() - silenceStartTime;
+      let currentTime = Date.now();
+      let duration = currentTime - lastStateChangeTime;
 
-      if (durationHistory.length > 0 || silenceBefore > 15) {
-        durationHistory.push(silenceBefore);
+      if (duration >= 10 && durationHistory.length > 0) {
+        durationHistory += "," + duration;
       }
-      durationHistory.push(toneDuration);
 
+      startTone();
+      signalStartTime = currentTime;
+      silenceStartTime = 0;
+      gapAdded = false;
+      lastStateChangeTime = currentTime;
+    }
+
+    function handlePressEnd(forcedDuration = null) {
+      if (!isTransmitting) return;
+      stopTone();
+      let currentTime = Date.now();
+      let duration = forcedDuration !== null ? forcedDuration : (currentTime - signalStartTime);
+      silenceStartTime = currentTime;
+
+      let threshold = (DOT_TIME + DASH_TIME) / 2;
+      let symbol = duration < threshold ? "." : "-";
+
+      estimatedDotTime = estimatedDotTime * 0.85 + duration * 0.15;
       currentCode += symbol;
       if (currentCode.length > 6) currentCode = "";
       currentCodeEl.textContent = currentCode;
 
-      startTone();
-
-      setTimeout(() => {
-        stopTone();
-        silenceStartTime = Date.now();
-        isTransmitting = false;
-        gapAdded = false;
-      }, toneDuration);
-    }
-
-    let activePaddle = null;
-    let paddleInterval = null;
-
-    function startAutoPaddle(symbol) {
-      if (activePaddle) return;
-      activePaddle = symbol;
-      
-      sendSymbol(activePaddle);
-
-      let intervalTime = ((activePaddle === ".") ? estimatedDotTime : estimatedDashTime) + 60;
-      paddleInterval = setInterval(() => {
-        if (activePaddle) {
-          sendSymbol(activePaddle);
-        }
-      }, intervalTime);
-    }
-
-    function stopAutoPaddle(symbol) {
-      if (activePaddle === symbol) {
-        activePaddle = null;
-        if (paddleInterval) {
-          clearInterval(paddleInterval);
-          paddleInterval = null;
-        }
-        stopTone();
-        isTransmitting = false;
+      if (duration >= 10) {
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += duration;
       }
+
+      lastStateChangeTime = currentTime;
+      isTransmitting = false;
     }
 
     let keyIsDown = false;
@@ -419,63 +372,32 @@
         e.preventDefault(); 
         if (e.repeat || keyIsDown) return;
         keyIsDown = true;
-        startAutoPaddle("."); 
+        handlePressStart();
       }
     });
 
     window.addEventListener('keyup', (e) => {
       if (e.code === 'ControlLeft') {
         keyIsDown = false;
-        stopAutoPaddle(".");
+        handlePressEnd();
       }
     });
 
+    // --- iPad用タッチパドルのイベント設定 ---
     const dotBtn = document.getElementById('dotBtn');
     const dashBtn = document.getElementById('dashBtn');
 
-    dotBtn.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      dotBtn.classList.add('touched');
-      startAutoPaddle(".");
-    }, {passive: false});
+    // DOTボタン
+    dotBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
+    dotBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd(DOT_TIME); }); // タッチは短点として処理
+    dotBtn.addEventListener('mousedown', () => { handlePressStart(); });
+    dotBtn.addEventListener('mouseup', () => { handlePressEnd(DOT_TIME); });
 
-    dotBtn.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      dotBtn.classList.remove('touched');
-      stopAutoPaddle(".");
-    }, {passive: false});
-
-    dotBtn.addEventListener('mousedown', (e) => {
-      dotBtn.classList.add('touched');
-      startAutoPaddle(".");
-    });
-
-    dotBtn.addEventListener('mouseup', (e) => {
-      dotBtn.classList.remove('touched');
-      stopAutoPaddle(".");
-    });
-
-    dashBtn.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      dashBtn.classList.add('touched');
-      startAutoPaddle("-");
-    }, {passive: false});
-
-    dashBtn.addEventListener('touchend', (e) => {
-      e.preventDefault();
-      dashBtn.classList.remove('touched');
-      stopAutoPaddle("-");
-    }, {passive: false});
-
-    dashBtn.addEventListener('mousedown', (e) => {
-      dashBtn.classList.add('touched');
-      startAutoPaddle("-");
-    });
-
-    dashBtn.addEventListener('mouseup', (e) => {
-      dashBtn.classList.remove('touched');
-      stopAutoPaddle("-");
-    });
+    // DASHボタン
+    dashBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
+    dashBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd(DASH_TIME); }); // タッチは長点として処理
+    dashBtn.addEventListener('mousedown', () => { handlePressStart(); });
+    dashBtn.addEventListener('mouseup', () => { handlePressEnd(DASH_TIME); });
   </script>
 </body>
 </html>
