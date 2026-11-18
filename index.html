@@ -2,31 +2,12 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-  <title>CW リアルタイム・モールス通信モニター (iPad / USB Paddle)</title>
+  <title>CW リアルタイム・モールス通信モニター (HiveMQ + USB Paddle)</title>
   <style>
-    body { 
-      background-color: #121212; 
-      color: #00FF00; 
-      font-family: 'Courier New', Courier, monospace; 
-      padding: 15px; 
-      margin: 0; 
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      touch-action: manipulation;
-    }
+    body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; }
     
-    .header-container { 
-      display: flex; 
-      align-items: center; 
-      justify-content: space-between; 
-      width: 100%; 
-      max-width: 600px; 
-      margin-bottom: 5px; 
-      box-sizing: border-box;
-    }
-    h3 { color: #FFFFFF; margin: 0; font-size: 18px; }
+    .header-container { display: flex; align-items: center; justify-content: space-between; width: 600px; margin-bottom: 5px; }
+    h3 { color: #FFFFFF; margin: 0; }
     
     .header-buttons { display: flex; gap: 8px; }
 
@@ -35,43 +16,20 @@
       color: #00FF00;
       border: 1px solid #444;
       border-radius: 4px;
-      padding: 6px 12px;
+      padding: 4px 10px;
       cursor: pointer;
       font-size: 14px;
       user-select: none;
     }
-    .action-btn:active { background-color: #444; }
+    .action-btn:hover { border-color: #00FF00; }
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
+    .clear-btn:hover { border-color: #FFAA00; background-color: #332200; }
 
-    .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; }
-    
-    #monitor { 
-      background-color: #000000; 
-      border: 12px solid #333333; 
-      border-radius: 8px; 
-      padding: 12px; 
-      width: 100%; 
-      max-width: 600px; 
-      height: 240px; 
-      font-size: 18px; 
-      line-height: 1.2; 
-      overflow-y: scroll; 
-      white-space: pre-wrap; 
-      word-wrap: break-word; 
-      box-shadow: inset 0 0 10px #00FF00; 
-      box-sizing: border-box; 
-    }
+    .info { color: #888888; font-size: 14px; margin-bottom: 15px; }
+    #monitor { background-color: #000000; border: 20px solid #333333; border-radius: 8px; padding: 15px; width: 600px; height: 240px; font-size: 20px; line-height: 1.2; overflow-y: scroll; white-space: pre-wrap; word-wrap: break-word; box-shadow: inset 0 0 10px #00FF00; box-sizing: border-box; }
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
-    
-    #status { 
-      margin-top: 12px; 
-      font-size: 15px; 
-      color: #FFFF00; 
-      width: 100%; 
-      max-width: 600px; 
-      box-sizing: border-box; 
-    }
+    #status { margin-top: 15px; font-size: 16px; color: #FFFF00; }
   </style>
   <!-- MQTT.js (WebSockets対応版) -->
   <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
@@ -79,7 +37,7 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ iPad Direct ]</h3>
+    <h3>Morse TRX [ HiveMQ iPad ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
@@ -92,7 +50,8 @@
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
   <script>
-    const MACHINE_ID = "iPad1"; // ※ESP32側と重複しないID
+    // --- ESP32側およびパドル設定と同期したパラメータ ---
+    const MACHINE_ID = "PC1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -142,58 +101,27 @@
     }
 
     // --- Web Audio API (SideTone: 700Hz) ---
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    let ctx = null;
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    let osc = null;
     let isMuted = true; 
-
-    // iOS対策を強化した確実なオーディオ初期化関数
-    function initAudio() {
-      if (!ctx) {
-        ctx = new AudioContext();
-      }
-      if (ctx.state === 'suspended') {
-        ctx.resume();
-      }
-    }
 
     function startTone() {
       if (isMuted) return;
-      initAudio();
-      if (!ctx) return;
-
-      // オシレータの作成と接続（毎回新しく生成して確実に鳴らす）
-      try {
-        let osc = ctx.createOscillator();
-        let gainNode = ctx.createGain();
-        
-        osc.type = 'sine';
+      if (ctx.state === 'suspended') { ctx.resume(); }
+      if (!osc) {
+        osc = ctx.createOscillator(); 
         osc.frequency.value = 700; 
-        
-        gainNode.gain.setValueAtTime(0.2, ctx.currentTime); // 音量調整（大きすぎないよう適度に設定）
-
-        osc.connect(gainNode);
-        gainNode.connect(ctx.destination);
-        
+        osc.connect(ctx.destination); 
         osc.start();
-        window._activeOsc = osc; // 保持
-      } catch(e) {
-        console.error("Tone start error:", e);
       }
     }
     
     function stopTone() {
-      if (window._activeOsc) {
-        try {
-          window._activeOsc.stop();
-          window._activeOsc.disconnect();
-        } catch(e){}
-        window._activeOsc = null;
-      }
+      if (osc) { osc.stop(); osc = null; }
     }
 
     const toggleSoundBtn = document.getElementById('toggleSoundBtn');
     toggleSoundBtn.addEventListener('click', () => {
-      initAudio();
       isMuted = !isMuted;
       if (isMuted) {
         toggleSoundBtn.textContent = "🔇 Sound: OFF";
@@ -205,12 +133,7 @@
       }
     });
 
-    // 画面のどこかを最初にタッチしたときにもオーディオコンテキストを強制起動
-    window.addEventListener('pointerdown', () => {
-      initAudio();
-    }, {once: true});
-
-    // --- モニタークリア機能 ---
+    // --- モニタークリア機能の追加 ---
     const clearBtn = document.getElementById('clearBtn');
     clearBtn.addEventListener('click', () => {
       decodedText = "";
@@ -364,8 +287,6 @@
         if (e.repeat || keyIsDown) return;
         keyIsDown = true;
         isTransmitting = true;
-
-        initAudio(); // 打鍵時にも確実にオーディオコンテキストを有効化
 
         let currentTime = Date.now();
         let duration = currentTime - lastStateChangeTime;
