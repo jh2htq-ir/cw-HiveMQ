@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (Fix Last Tone)</title>
+  <title>CW リアルタイム・モールス通信モニター (Fix All Tones)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
@@ -65,7 +65,7 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ Fix Last Tone ]</h3>
+    <h3>Morse TRX [ Perfect Audio Sync ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
@@ -175,10 +175,10 @@
 
     let lastPublishTime = 0;
 
-    // 受信音を最後まで確実に再生するスケジュール関数
+    // 受信したすべてのduration配列を最後まで確実・完璧に再生するスケジュール関数
     function playRemoteToneSequence(durations) {
       if (isMuted) return;
-      if (isTransmitting || (Date.now() - lastPublishTime < 1000)) return;
+      if (isTransmitting || (Date.now() - lastPublishTime < 800)) return;
 
       initAudio();
 
@@ -190,7 +190,7 @@
         if (isNaN(durSec) || durSec <= 0) continue;
 
         if (i % 2 === 0) {
-          // 信号音 (Dit / Dah)
+          // 信号音
           try {
             let osc = ctx.createOscillator();
             let gain = ctx.createGain();
@@ -240,7 +240,7 @@
     let currentCode = ""; 
     let decodedText = ""; 
     let gapAdded = false;
-    let durationHistory = "";
+    let durationHistory = []; // 配列で保持してデータの抜け落ちを防止
     let lastStateChangeTime = Date.now();
     let isTransmitting = false;
 
@@ -318,7 +318,7 @@
       });
     }
 
-    // --- 自局の無音判定ループ（最後の短点・長点データを絶対に落とさないよう修正） ---
+    // --- 自局の無音判定ループ（すべての打鍵データを完璧にまとめて送信） ---
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
@@ -331,15 +331,14 @@
         currentCode = "";
         currentCodeEl.textContent = "";
 
-        if (durationHistory.length > 0) durationHistory += ",";
-        durationHistory += silenceDuration;
-        let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
+        durationHistory.push(silenceDuration);
+        let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory.join(",") + "]";
         
         if (client && client.connected) {
           lastPublishTime = Date.now();
           client.publish(TOPIC_TX_RX, mqttMessage);
         }
-        durationHistory = "";
+        durationHistory = []; // 送信後にクリア
         gapAdded = false;
       }
 
@@ -355,15 +354,14 @@
         }
         gapAdded = true;
         
-        if (durationHistory.length > 0) durationHistory += ",";
-        durationHistory += silenceDuration;
-        let spaceMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
+        durationHistory.push(silenceDuration);
+        let spaceMessage = "[" + MACHINE_ID + ":" + durationHistory.join(",") + "]";
         
         if (client && client.connected) {
           lastPublishTime = Date.now();
           client.publish(TOPIC_TX_RX, spaceMessage);
         }
-        durationHistory = "";
+        durationHistory = [];
       }
     }, 10);
 
@@ -375,8 +373,8 @@
       let currentTime = Date.now();
       let duration = currentTime - lastStateChangeTime;
 
-      if (duration >= 10 && durationHistory.length > 0) {
-        durationHistory += "," + duration;
+      if (duration >= 10) {
+        durationHistory.push(duration);
       }
 
       startTone();
@@ -399,8 +397,7 @@
       currentCodeEl.textContent = currentCode;
 
       if (duration >= 10) {
-        if (durationHistory.length > 0) durationHistory += ",";
-        durationHistory += duration;
+        durationHistory.push(duration);
       }
 
       lastStateChangeTime = currentTime;
