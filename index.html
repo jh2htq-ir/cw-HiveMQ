@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (HiveMQ + Auto-Repeat Paddle)</title>
+  <title>CW リアルタイム・モールス通信モニター (13 WPM + Paddle Reverse)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
     .header-container { display: flex; align-items: center; justify-content: space-between; max-width: 600px; margin-bottom: 5px; flex-wrap: wrap; gap: 10px; }
     h3 { color: #FFFFFF; margin: 0; }
     
-    .header-buttons { display: flex; gap: 8px; }
+    .header-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
 
     .action-btn {
       background-color: #222;
@@ -26,13 +26,14 @@
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
     .clear-btn:hover { border-color: #FFAA00; background-color: #332200; }
+    .reverse-btn { color: #00FFFF; border-color: #006666; }
+    .reverse-btn.reversed { background-color: #004444; color: #FFFF00; border-color: #FFFF00; }
 
     .info { color: #888888; font-size: 14px; margin-bottom: 15px; }
     #monitor { background-color: #000000; border: 15px solid #333333; border-radius: 8px; padding: 15px; width: 100%; max-width: 600px; height: 220px; font-size: 20px; line-height: 1.2; overflow-y: scroll; white-space: pre-wrap; word-wrap: break-word; box-shadow: inset 0 0 10px #00FF00; box-sizing: border-box; }
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
     #status { margin-top: 15px; font-size: 16px; color: #FFFF00; }
 
-    /* iPad用パドルボタンのスタイル */
     .paddle-container {
       display: flex;
       gap: 15px;
@@ -67,26 +68,25 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ Auto-Repeat Paddle ]</h3>
+    <h3>Morse TRX [ 13 WPM / Reverse ]</h3>
     <div class="header-buttons">
+      <button id="reverseBtn" class="action-btn reverse-btn">🔄 Paddle: Normal</button>
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">Touch and hold DOT or DASH buttons below for auto-repeat. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Speed: ~13 WPM. Use Paddle Reverse switch if needed. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
-  <!-- iPad・スマホ用のオンスクリーンパドル (DOT / DASH) -->
   <div class="paddle-container">
-    <div id="dotBtn" class="paddle-btn">· DOT</div>
-    <div id="dashBtn" class="paddle-btn">- DASH</div>
+    <div id="leftPaddleBtn" class="paddle-btn">· DIT</div>
+    <div id="rightPaddleBtn" class="paddle-btn">- DASH</div>
   </div>
 
   <script>
-    // --- 端末ID (iPad側は "iPad1" などに変更してください) ---
     const MACHINE_ID = "iPad1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
@@ -100,10 +100,30 @@
     };
     const TOPIC_TX_RX = "cw/trx/durations"; 
 
-    const DOT_TIME = 60; 
+    // --- 13 WPM 設定 (1.200 / 13 ≒ 92ms) ---
+    const DOT_TIME = 92; 
     const DASH_TIME = DOT_TIME * 3;     
     const LETTER_GAP = DOT_TIME * 3;    
     const WORD_GAP = DOT_TIME * 7;      
+
+    // パドル反転フラグ
+    let isPaddleReversed = false;
+
+    const reverseBtn = document.getElementById('reverseBtn');
+    reverseBtn.addEventListener('click', () => {
+      isPaddleReversed = !isPaddleReversed;
+      if (isPaddleReversed) {
+        reverseBtn.textContent = "🔄 Paddle: Reversed";
+        reverseBtn.classList.add('reversed');
+        leftPaddleBtn.innerHTML = "- DASH";
+        rightPaddleBtn.innerHTML = "· DIT";
+      } else {
+        reverseBtn.textContent = "🔄 Paddle: Normal";
+        reverseBtn.classList.remove('reversed');
+        leftPaddleBtn.innerHTML = "· DIT";
+        rightPaddleBtn.innerHTML = "- DASH";
+      }
+    });
 
     const connStatusEl = document.getElementById('connStatus');
 
@@ -239,7 +259,6 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 他局からのMQTTメッセージ受信処理 ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
@@ -376,31 +395,34 @@
       }
     });
 
-    // --- エレクトロニック・キーヤー（自動連打）エンジン ---
-    let dotPressed = false;
-    let dashPressed = false;
+    // --- エレクトロニック・キーヤー（自動連打エンジン） ---
+    let leftPressed = false;
+    let rightPressed = false;
     let keyerRunning = false;
 
     async function runKeyer() {
       if (keyerRunning) return;
       keyerRunning = true;
 
-      while (dotPressed || dashPressed) {
+      while (leftPressed || rightPressed) {
         let symbol = "";
         let duration = 0;
 
-        // 優先順位（または押されている方）を決定
-        if (dotPressed) {
+        // ノーマル時: 左=DOT, 右=DASH
+        // リバース時: 左=DASH, 右=DOT
+        let activeDot = isPaddleReversed ? rightPressed : leftPressed;
+        let activeDash = isPaddleReversed ? leftPressed : rightPressed;
+
+        if (activeDot) {
           symbol = ".";
           duration = DOT_TIME;
-        } else if (dashPressed) {
+        } else if (activeDash) {
           symbol = "-";
           duration = DASH_TIME;
         } else {
           break;
         }
 
-        // 打鍵開始
         let currentTime = Date.now();
         let gap = currentTime - lastStateChangeTime;
         if (gap >= 10 && durationHistory.length > 0) {
@@ -414,10 +436,8 @@
         gapAdded = false;
         lastStateChangeTime = currentTime;
 
-        // 音を鳴らしている時間待機
         await new Promise(resolve => setTimeout(resolve, duration));
 
-        // 打鍵終了
         stopTone();
         currentTime = Date.now();
         silenceStartTime = currentTime;
@@ -433,26 +453,25 @@
         lastStateChangeTime = currentTime;
         isTransmitting = false;
 
-        // 要素間（トンとトンの間）のスペース時間（1要素分）待機
         await new Promise(resolve => setTimeout(resolve, DOT_TIME));
       }
 
       keyerRunning = false;
     }
 
-    // --- iPad用タッチパドルボタンの設定 (オートリピート対応) ---
-    const dotBtn = document.getElementById('dotBtn');
-    const dashBtn = document.getElementById('dashBtn');
+    // --- パドルボタンの設定 ---
+    const leftPaddleBtn = document.getElementById('leftPaddleBtn');
+    const rightPaddleBtn = document.getElementById('rightPaddleBtn');
 
-    function setupAutoRepeatPaddle(btn, isDash) {
+    function setupPaddle(btn, isLeft) {
       const startHandler = (e) => {
         if (e) e.preventDefault();
         initAudio();
         btn.classList.add('touched');
-        if (isDash) {
-          dashPressed = true;
+        if (isLeft) {
+          leftPressed = true;
         } else {
-          dotPressed = true;
+          rightPressed = true;
         }
         runKeyer();
       };
@@ -460,14 +479,13 @@
       const endHandler = (e) => {
         if (e) e.preventDefault();
         btn.classList.remove('touched');
-        if (isDash) {
-          dashPressed = false;
+        if (isLeft) {
+          leftPressed = false;
         } else {
-          dotPressed = false;
+          rightPressed = false;
         }
       };
 
-      // タッチ・マウスイベントの割り当て
       btn.addEventListener('touchstart', startHandler);
       btn.addEventListener('touchend', endHandler);
       btn.addEventListener('touchcancel', endHandler);
@@ -477,8 +495,8 @@
       btn.addEventListener('mouseleave', endHandler);
     }
 
-    setupAutoRepeatPaddle(dotBtn, false); // DOT
-    setupAutoRepeatPaddle(dashBtn, true);  // DASH
+    setupPaddle(leftPaddleBtn, true);   // 左ボタン
+    setupPaddle(rightPaddleBtn, false); // 右ボタン
   </script>
 </body>
 </html>
