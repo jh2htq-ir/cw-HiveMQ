@@ -15,6 +15,7 @@
       flex-direction: column;
       align-items: center;
       touch-action: manipulation;
+      -webkit-touch-callout: none;
     }
     
     .header-container { 
@@ -25,6 +26,7 @@
       max-width: 600px; 
       margin-bottom: 5px; 
       box-sizing: border-box;
+      z-index: 10;
     }
     h3 { color: #FFFFFF; margin: 0; font-size: 18px; }
     
@@ -44,7 +46,7 @@
     .action-btn.muted { color: #FF4444; border-color: #FF4444; }
     .clear-btn { color: #FFAA00; border-color: #664400; }
 
-    .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; }
+    .info { color: #888888; font-size: 13px; margin-bottom: 12px; width: 100%; max-width: 600px; box-sizing: border-box; z-index: 10; }
     
     #monitor { 
       background-color: #000000; 
@@ -61,6 +63,7 @@
       word-wrap: break-word; 
       box-shadow: inset 0 0 10px #00FF00; 
       box-sizing: border-box; 
+      z-index: 10;
     }
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
     
@@ -71,15 +74,29 @@
       width: 100%; 
       max-width: 600px; 
       box-sizing: border-box; 
+      z-index: 10;
     }
 
-    /* iPad用の隠しフォーカス保持用要素（画面を汚さずにキーを受け付けるため） */
+    /* iPadOSのタッチ非アクティブ化を防ぎ、常にキーイベントを維持するための透明常時カバー層 */
+    #touchActivator {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      background: transparent;
+      z-index: 1;
+      pointer-events: auto;
+    }
+
+    /* 隠し入力要素 */
     #focusTrap {
       position: absolute;
       opacity: 0;
-      pointer-events: none;
       height: 0;
       width: 0;
+      border: none;
+      z-index: 2;
     }
   </style>
   <!-- MQTT.js (WebSockets対応版) -->
@@ -87,8 +104,9 @@
 </head>
 <body>
 
-  <!-- iPadで画面に触れていなくてもキー入力を常時トラップするための隠し入力要素 -->
-  <input type="text" id="focusTrap" autocomplete="off" autofocus>
+  <!-- iPadで画面に触れていなくてもキー入力を常時アクティブにするための常時受信用レイヤー -->
+  <div id="touchActivator"></div>
+  <input type="text" id="focusTrap" autocomplete="off">
 
   <div class="header-container">
     <h3>Morse TRX [ iPad USB Paddle ]</h3>
@@ -105,7 +123,6 @@
 
   <script>
     // --- ESP32側およびパドル設定と同期したパラメータ ---
-    // ※ESP32側や他の端末と重複しないIDを設定してください
     const MACHINE_ID = "iPad1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
@@ -364,28 +381,36 @@
 
     let keyIsDown = false;
 
-    // --- iPadOS向けフォーカス強制常時維持の仕組み ---
+    // --- iPadOS向け常時フォーカス＆タッチアクティベーター ---
     const focusTrap = document.getElementById('focusTrap');
-    
-    // ページ全体で常に隠し要素にフォーカスを強制保持させる
-    function ensureFocus() {
+    const touchActivator = document.getElementById('touchActivator');
+
+    function keepFocus() {
       if (document.activeElement !== focusTrap) {
         focusTrap.focus();
       }
     }
-    
-    window.addEventListener('load', () => { focusTrap.focus(); });
-    window.addEventListener('click', () => { focusTrap.focus(); });
-    setInterval(ensureFocus, 1000); // 1秒ごとにフォーカスを自動で引き戻す
 
-    window.addEventListener('keydown', (e) => {
+    // 画面のどこを触っても、または定期的にフォーカスを隠し入力欄に集中させ、キー入力をいつでも受け付ける状態にする
+    ['touchstart', 'touchend', 'click', 'pointerdown'].forEach(evt => {
+      touchActivator.addEventListener(evt, (e) => {
+        initAudio();
+        focusTrap.focus();
+      });
+    });
+
+    window.addEventListener('load', () => { focusTrap.focus(); });
+    setInterval(keepFocus, 500);
+
+    // 共通の打鍵開始・終了ロジック
+    function handleKeyDown(e) {
       if (e.code === 'ControlLeft') {
         e.preventDefault(); 
         if (e.repeat || keyIsDown) return;
         keyIsDown = true;
         isTransmitting = true;
 
-        initAudio(); // 音声コンテキスト有効化
+        initAudio();
 
         let currentTime = Date.now();
         let duration = currentTime - lastStateChangeTime;
@@ -400,9 +425,9 @@
         gapAdded = false;
         lastStateChangeTime = currentTime;
       }
-    });
+    }
 
-    window.addEventListener('keyup', (e) => {
+    function handleKeyUp(e) {
       if (e.code === 'ControlLeft') {
         keyIsDown = false;
         stopTone();
@@ -426,7 +451,15 @@
         lastStateChangeTime = currentTime;
         isTransmitting = false;
       }
-    });
+    }
+
+    // 複数経路（window, document, focusTrap）でキー入力を完全捕捉
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+    focusTrap.addEventListener('keydown', handleKeyDown);
+    focusTrap.addEventListener('keyup', handleKeyUp);
   </script>
 </body>
 </html>
