@@ -88,15 +88,15 @@
       color: #00FF00;
       border: 2px solid #00FF00;
       border-radius: 8px;
-      padding: 20px 0;
-      font-size: 20px;
+      padding: 25px 0;
+      font-size: 22px;
       font-weight: bold;
       text-align: center;
       cursor: pointer;
       user-select: none;
       -webkit-user-select: none;
     }
-    .paddle-btn:active {
+    .paddle-btn:active, .paddle-btn.touched {
       background-color: #00FF00;
       color: #000000;
     }
@@ -126,7 +126,7 @@
   </div>
 
   <script>
-    // --- iPad用設定 (マシンIDはPC1など重複しないIDに変更してください) ---
+    // --- iPad用設定 (マシンIDは重複しないよう設定) ---
     const MACHINE_ID = "iPad1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
@@ -387,13 +387,14 @@
       isTransmitting = true;
     }
 
-    function handlePressEnd(symbolType) {
+    function handlePressEnd(forcedSymbol) {
       stopTone();
       let currentTime = Date.now();
       let duration = currentTime - signalStartTime;
       silenceStartTime = currentTime;
 
-      let symbol = symbolType;
+      // 押していた時間に基づいて自動判定、またはボタン（Dot/Dash）ごとの強制指定
+      let symbol = forcedSymbol;
       if (!symbol) {
         let threshold = (DOT_TIME + DASH_TIME) / 2;
         symbol = duration < threshold ? "." : "-";
@@ -427,7 +428,7 @@
     window.addEventListener('keyup', (e) => {
       if (e.code === 'ControlLeft') {
         keyIsDown = false;
-        handlePressEnd(null);
+        handlePressEnd(null); // Ctrlキー離したときは時間で判定
       }
     });
 
@@ -435,17 +436,51 @@
     const dotBtn = document.getElementById('dotBtn');
     const dashBtn = document.getElementById('dashBtn');
 
-    // Dotボタン
-    dotBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
-    dotBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd("."); });
-    dotBtn.addEventListener('mousedown', (e) => { handlePressStart(); });
-    dotBtn.addEventListener('mouseup', (e) => { handlePressEnd("."); });
+    // --- Dotボタンのイベント ---
+    dotBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      dotBtn.classList.add('touched');
+      handlePressStart();
+    }, {passive: false});
 
-    // Dashボタン
-    dashBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
-    dashBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd("-"); });
-    dashBtn.addEventListener('mousedown', (e) => { handlePressStart(); });
-    dashBtn.addEventListener('mouseup', (e) => { handlePressEnd("-"); });
+    dotBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      dotBtn.classList.remove('touched');
+      handlePressEnd("."); // 離した瞬間に強制的に「.」として確定
+    }, {passive: false});
+
+    dotBtn.addEventListener('mousedown', (e) => {
+      dotBtn.classList.add('touched');
+      handlePressStart();
+    });
+
+    dotBtn.addEventListener('mouseup', (e) => {
+      dotBtn.classList.remove('touched');
+      handlePressEnd(".");
+    });
+
+    // --- Dashボタンのイベント ---
+    dashBtn.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      dashBtn.classList.add('touched');
+      handlePressStart();
+    }, {passive: false});
+
+    dashBtn.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      dashBtn.classList.remove('touched');
+      handlePressEnd("-"); // 離した瞬間に強制的に「-」として確定
+    }, {passive: false});
+
+    dashBtn.addEventListener('mousedown', (e) => {
+      dashBtn.classList.add('touched');
+      handlePressStart();
+    });
+
+    dashBtn.addEventListener('mouseup', (e) => {
+      dashBtn.classList.remove('touched');
+      handlePressEnd("-");
+    });
   </script>
 </body>
 </html>
