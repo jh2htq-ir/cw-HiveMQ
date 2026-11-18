@@ -73,7 +73,7 @@
       box-sizing: border-box; 
     }
 
-    /* タッチ用パドルボタンエリア（iPad画面用） */
+    /* タッチ用パドルボタンエリア */
     .touch-paddle-container {
       display: flex;
       gap: 15px;
@@ -119,14 +119,13 @@
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
-  <!-- タッチ操作用のパドルボタン（iPad画面タッチ用） -->
+  <!-- タッチ操作用のパドルボタン -->
   <div class="touch-paddle-container">
     <div id="dotBtn" class="paddle-btn">・ (DOT)</div>
     <div id="dashBtn" class="paddle-btn">− (DASH)</div>
   </div>
 
   <script>
-    // --- iPad用設定 ---
     const MACHINE_ID = "iPad1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
@@ -140,10 +139,9 @@
     };
     const TOPIC_TX_RX = "cw/trx/durations"; 
 
-    // モールス基準時間（少しゆとりを持たせて連続打鍵をしやすく調整）
     const DOT_TIME = 50; 
     const DASH_TIME = DOT_TIME * 3;     
-    const LETTER_GAP = Math.max(220, DOT_TIME * 4.0); // 文字間の判定を少し広げて途切れを防止
+    const LETTER_GAP = Math.max(220, DOT_TIME * 4.0); 
     const WORD_GAP = DOT_TIME * 8.0;      
 
     const connStatusEl = document.getElementById('connStatus');
@@ -224,7 +222,6 @@
       }
     });
 
-    // --- モニタークリア機能 ---
     const clearBtn = document.getElementById('clearBtn');
     clearBtn.addEventListener('click', () => {
       decodedText = "";
@@ -233,18 +230,15 @@
       currentCodeEl.textContent = "";
     });
 
-    // --- モールス信号・デコード設定 ---
     const morseTable = {
       ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z", ".----": "1", "..---": "2", "...--": "3", "....-": "4", ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9", "-----": "0", ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/", ".--.-.": "@", "-....-": "-", "-...-": "=", ".-.-.": "+", "...-.-": ";"
     };
 
-    let signalStartTime = 0; 
-    let silenceStartTime = 0; 
+    let silenceStartTime = Date.now(); 
     let currentCode = ""; 
     let decodedText = ""; 
     let gapAdded = false;
     let durationHistory = "";
-    let lastStateChangeTime = Date.now();
     let isTransmitting = false;
 
     const monitorEl = document.getElementById('monitor'); 
@@ -275,7 +269,6 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 他局からのMQTTメッセージ受信処理 ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
@@ -367,47 +360,67 @@
       }
     }, 10);
 
-    // --- 打鍵開始・終了の共通処理 ---
-    function handlePressStart() {
-      initAudio();
-      let currentTime = Date.now();
-      let duration = currentTime - lastStateChangeTime;
-
-      if (duration >= 10 && durationHistory.length > 0) {
-        durationHistory += "," + duration;
-      }
-
-      startTone();
-      signalStartTime = currentTime;
-      silenceStartTime = 0;
-      gapAdded = false;
-      lastStateChangeTime = currentTime;
+    // --- 1文字単位の送出・履歴記録 ---
+    function sendSymbol(symbol) {
       isTransmitting = true;
-    }
+      initAudio();
 
-    function handlePressEnd(forcedSymbol) {
-      stopTone();
-      let currentTime = Date.now();
-      let duration = currentTime - signalStartTime;
-      silenceStartTime = currentTime;
+      let toneDuration = (symbol === ".") ? DOT_TIME : DASH_TIME;
+      let spaceDuration = DOT_TIME; // 符号間のスペース
 
-      let symbol = forcedSymbol;
-      if (!symbol) {
-        let threshold = (DOT_TIME + DASH_TIME) / 2;
-        symbol = duration < threshold ? "." : "-";
+      // 履歴に前回からの無音＋今回のトーン時間を追加
+      let silenceBefore = Date.now() - silenceStartTime;
+      if (durationHistory.length > 0 || silenceBefore > 10) {
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += silenceBefore + "," + toneDuration;
+      } else {
+        durationHistory += toneDuration;
       }
 
       currentCode += symbol;
       if (currentCode.length > 6) currentCode = "";
       currentCodeEl.textContent = currentCode;
 
-      if (duration >= 10) {
-        if (durationHistory.length > 0) durationHistory += ",";
-        durationHistory += duration;
-      }
+      startTone();
 
-      lastStateChangeTime = currentTime;
-      isTransmitting = false;
+      setTimeout(() => {
+        stopTone();
+        silenceStartTime = Date.now();
+        isTransmitting = false;
+        gapAdded = false;
+      }, toneDuration);
+    }
+
+    // --- 押し続けている間、自動で連続送出するパドル機構 (オートラバ) ---
+    let activePaddle = null;
+    let paddleInterval = null;
+
+    function startAutoPaddle(symbol) {
+      if (activePaddle) return;
+      activePaddle = symbol;
+      
+      // 初回即座に送出
+      sendSymbol(activePaddle);
+
+      // 押している間、(トーン時間 + 符号間スペース) の間隔で自動連打
+      let intervalTime = ((activePaddle === ".") ? DOT_TIME : DASH_TIME) + DOT_TIME;
+      paddleInterval = setInterval(() => {
+        if (activePaddle) {
+          sendSymbol(activePaddle);
+        }
+      }, intervalTime);
+    }
+
+    function stopAutoPaddle(symbol) {
+      if (activePaddle === symbol) {
+        activePaddle = null;
+        if (paddleInterval) {
+          clearInterval(paddleInterval);
+          paddleInterval = null;
+        }
+        stopTone();
+        isTransmitting = false;
+      }
     }
 
     // 1. USBパドルインターフェースからのキーボード入力 (Left Ctrl)
@@ -417,63 +430,65 @@
         e.preventDefault(); 
         if (e.repeat || keyIsDown) return;
         keyIsDown = true;
-        handlePressStart();
+        startAutoPaddle("."); // キーボード入力は短点扱いで連続連打
       }
     });
 
     window.addEventListener('keyup', (e) => {
       if (e.code === 'ControlLeft') {
         keyIsDown = false;
-        handlePressEnd(null); 
+        stopAutoPaddle(".");
       }
     });
 
-    // 2. 画面上のタッチ用パドルボタン操作
+    // 2. 画面上のタッチ用パドルボタン操作（押し続けで連続連打）
     const dotBtn = document.getElementById('dotBtn');
     const dashBtn = document.getElementById('dashBtn');
 
+    // Dotボタン
     dotBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
       dotBtn.classList.add('touched');
-      handlePressStart();
+      startAutoPaddle(".");
     }, {passive: false});
 
     dotBtn.addEventListener('touchend', (e) => {
       e.preventDefault();
       dotBtn.classList.remove('touched');
-      handlePressEnd("."); 
+      stopAutoPaddle(".");
     }, {passive: false});
 
     dotBtn.addEventListener('mousedown', (e) => {
       dotBtn.classList.add('touched');
-      handlePressStart();
+      startAutoPaddle(".");
     });
 
     dotBtn.addEventListener('mouseup', (e) => {
       dotBtn.classList.remove('touched');
-      handlePressEnd(".");
+      stopAutoPaddle(".");
     });
 
+    // Dashボタン
     dashBtn.addEventListener('touchstart', (e) => {
       e.preventDefault();
       dashBtn.classList.add('touched');
-      handlePressStart();
+      startAutoPaddle("-");
     }, {passive: false});
 
     dashBtn.addEventListener('touchend', (e) => {
       e.preventDefault();
       dashBtn.classList.remove('touched');
-      handlePressEnd("-"); 
+      stopAutoPaddle("-");
     }, {passive: false});
 
     dashBtn.addEventListener('mousedown', (e) => {
       dashBtn.classList.add('touched');
-      handlePressStart();
+      startAutoPaddle("-");
     });
 
     dashBtn.addEventListener('mouseup', (e) => {
       dashBtn.classList.remove('touched');
-      handlePressEnd("-");
+      stopAutoPaddle("-");
     });
   </script>
 </body>
