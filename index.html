@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (HiveMQ + iPad Compatible)</title>
+  <title>CW リアルタイム・モールス通信モニター (HiveMQ + Synced)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 15px; margin: 0; box-sizing: border-box; }
     
@@ -32,7 +32,6 @@
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
     #status { margin-top: 10px; font-size: 15px; color: #FFFF00; }
 
-    /* iPad用タッチパドルボタンのスタイル */
     .paddle-container {
       display: flex;
       gap: 15px;
@@ -67,7 +66,7 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ iPad / Browser ]</h3>
+    <h3>Morse TRX [ Synced Version ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
@@ -79,14 +78,14 @@
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
-  <!-- iPad・スマホ用のオンスクリーンパドルボタン -->
   <div class="paddle-container">
     <div id="dotBtn" class="paddle-btn">· (DOT)</div>
     <div id="dashBtn" class="paddle-btn">- (DASH)</div>
   </div>
 
   <script>
-    const MACHINE_ID = "iPad1"; // 必要に応じてPC1と被らないIDに変更してください
+    // 端末ごとに MACHINE_ID を変更してください (例: Windows側は "PC1", iPad側は "iPad1")
+    const MACHINE_ID = "iPad1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -97,9 +96,9 @@
       reconnectPeriod: 3000,
       connectTimeout: 10000
     };
-    const TOPIC_TX_RX = "cw/trx/durations"; 
+    const TOPIC_TX_RX = "cw/trx/symbols"; 
 
-    const DOT_TIME = 50; 
+    const DOT_TIME = 60; 
     const DASH_TIME = DOT_TIME * 3;     
     const LETTER_GAP = DOT_TIME * 3;    
     const WORD_GAP = DOT_TIME * 7;      
@@ -154,16 +153,23 @@
       if (isMuted) return;
       initAudio();
       if (!osc) {
-        osc = ctx.createOscillator(); 
-        osc.frequency.value = 700; 
-        osc.connect(ctx.destination); 
-        osc.start();
+        try {
+          osc = ctx.createOscillator(); 
+          osc.frequency.value = 700; 
+          osc.connect(ctx.destination); 
+          osc.start();
+        } catch(e) {
+          osc = null;
+        }
       }
     }
     
     function stopTone() {
       if (osc) { 
-        try { osc.stop(); } catch(e){}
+        try { 
+          osc.stop(); 
+          osc.disconnect();
+        } catch(e){}
         osc = null; 
       }
     }
@@ -190,20 +196,15 @@
       currentCodeEl.textContent = "";
     });
 
-    let estimatedDotTime = DOT_TIME;   
-    let estimatedDashTime = DASH_TIME; 
-
     const morseTable = {
       ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z", ".----": "1", "..---": "2", "...--": "3", "....-": "4", ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9", "-----": "0", ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/", ".--.-.": "@", "-....-": "-", "-...-": "=", ".-.-.": "+", "...-.-": ";"
     };
 
     let signalStartTime = 0; 
-    let silenceStartTime = 0; 
+    let silenceStartTime = Date.now(); 
     let currentCode = ""; 
     let decodedText = ""; 
     let gapAdded = false;
-    let durationHistory = "";
-    let lastStateChangeTime = Date.now();
     let isTransmitting = false;
 
     const monitorEl = document.getElementById('monitor'); 
@@ -234,56 +235,34 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
+    // --- 他局からのMQTTメッセージ受信処理（シンボル単位で同期） ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
         let msg = payload.toString();
         
-        msg = msg.replace("[", "").replace("]", "");
         let colIdx = msg.indexOf(':');
         if (colIdx === -1) return;
 
         let senderID = msg.substring(0, colIdx);
         let dataPart = msg.substring(colIdx + 1);
 
-        if (senderID === MACHINE_ID) return;
+        if (senderID === MACHINE_ID) return; // 自局の送信分は無視
 
         if (dataPart === "SPACE") {
           if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
             updateMonitor(" ");
           }
-          return;
-        }
-
-        let vals = dataPart.split(',');
-        let remoteCode = "";
-        for (let i = 0; i < vals.length; i++) {
-          let dur = parseInt(vals[i]);
-          if (isNaN(dur)) continue;
-          if (i % 2 === 0) {
-            if (dur < (DASH_TIME - (DOT_TIME / 2))) remoteCode += ".";
-            else remoteCode += "-";
-          } else {
-            if (dur >= LETTER_GAP && remoteCode.length > 0) {
-              let ch = morseTable[remoteCode];
-              if (ch) updateMonitor(ch);
-              remoteCode = "";
-            }
-            if (dur >= WORD_GAP) {
-              if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
-                updateMonitor(" ");
-              }
-            }
+        } else {
+          let char = morseTable[dataPart];
+          if (char) {
+            updateMonitor(char);
           }
-        }
-        if (remoteCode.length > 0) {
-          let ch = morseTable[remoteCode];
-          if (ch) updateMonitor(ch);
         }
       });
     }
 
-    // --- 自局の打鍵・無音判定ループ ---
+    // --- 無音判定ループ（文字・ワードの確定） ---
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
@@ -292,23 +271,23 @@
         let char = morseTable[currentCode];
         if (char) {
           updateMonitor(char);
+          if (client && client.connected) {
+            client.publish(TOPIC_TX_RX, MACHINE_ID + ":" + currentCode);
+          }
         }
         currentCode = "";
         currentCodeEl.textContent = "";
-
-        if (durationHistory.length > 0) durationHistory += ",";
-        durationHistory += silenceDuration;
-        let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
-        if (client && client.connected) {
-          client.publish(TOPIC_TX_RX, mqttMessage);
-        }
-        durationHistory = "";
       }
 
       if (!isTransmitting && !gapAdded && decodedText.length > 0 && silenceDuration >= WORD_GAP) {
         if (currentCode.length > 0) {
           let char = morseTable[currentCode];
-          if (char) updateMonitor(char);
+          if (char) {
+            updateMonitor(char);
+            if (client && client.connected) {
+              client.publish(TOPIC_TX_RX, MACHINE_ID + ":" + currentCode);
+            }
+          }
           currentCode = "";
           currentCodeEl.textContent = "";
         }
@@ -316,30 +295,19 @@
           updateMonitor(" ");
         }
         gapAdded = true;
-        let spaceMessage = "[" + MACHINE_ID + ":SPACE]";
         if (client && client.connected) {
-          client.publish(TOPIC_TX_RX, spaceMessage);
+          client.publish(TOPIC_TX_RX, MACHINE_ID + ":SPACE");
         }
       }
     }, 10);
 
-    // --- 共通の打鍵開始・終了処理 ---
     function handlePressStart() {
       if (isTransmitting) return;
       isTransmitting = true;
 
-      let currentTime = Date.now();
-      let duration = currentTime - lastStateChangeTime;
-
-      if (duration >= 10 && durationHistory.length > 0) {
-        durationHistory += "," + duration;
-      }
-
       startTone();
-      signalStartTime = currentTime;
-      silenceStartTime = 0;
+      signalStartTime = Date.now();
       gapAdded = false;
-      lastStateChangeTime = currentTime;
     }
 
     function handlePressEnd(forcedDuration = null) {
@@ -352,17 +320,10 @@
       let threshold = (DOT_TIME + DASH_TIME) / 2;
       let symbol = duration < threshold ? "." : "-";
 
-      estimatedDotTime = estimatedDotTime * 0.85 + duration * 0.15;
       currentCode += symbol;
       if (currentCode.length > 6) currentCode = "";
       currentCodeEl.textContent = currentCode;
 
-      if (duration >= 10) {
-        if (durationHistory.length > 0) durationHistory += ",";
-        durationHistory += duration;
-      }
-
-      lastStateChangeTime = currentTime;
       isTransmitting = false;
     }
 
@@ -383,21 +344,32 @@
       }
     });
 
-    // --- iPad用タッチパドルのイベント設定 ---
+    // --- タッチパドル（誤動作防止・キャンセル対応版） ---
     const dotBtn = document.getElementById('dotBtn');
     const dashBtn = document.getElementById('dashBtn');
 
-    // DOTボタン
-    dotBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
-    dotBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd(DOT_TIME); }); // タッチは短点として処理
-    dotBtn.addEventListener('mousedown', () => { handlePressStart(); });
-    dotBtn.addEventListener('mouseup', () => { handlePressEnd(DOT_TIME); });
+    function setupButton(btn, isDash) {
+      const duration = isDash ? DASH_TIME : DOT_TIME;
+      
+      btn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
+      btn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd(duration); });
+      btn.addEventListener('touchcancel', (e) => { e.preventDefault(); handlePressEnd(duration); }); // 鳴りっぱなし防止
+      
+      btn.addEventListener('mousedown', () => { handlePressStart(); });
+      btn.addEventListener('mouseup', () => { handlePressEnd(duration); });
+      btn.addEventListener('mouseleave', () => { if(isTransmitting) handlePressEnd(duration); }); // 枠外に出たら強制終了
+    }
 
-    // DASHボタン
-    dashBtn.addEventListener('touchstart', (e) => { e.preventDefault(); handlePressStart(); });
-    dashBtn.addEventListener('touchend', (e) => { e.preventDefault(); handlePressEnd(DASH_TIME); }); // タッチは長点として処理
-    dashBtn.addEventListener('mousedown', () => { handlePressStart(); });
-    dashBtn.addEventListener('mouseup', () => { handlePressEnd(DASH_TIME); });
+    setupButton(dotBtn, false);
+    setupButton(dashBtn, true);
+
+    // ウィンドウからフォーカスが外れたときも音が鳴り続けるのを防ぐ
+    window.addEventListener('blur', () => {
+      if (isTransmitting) {
+        keyIsDown = false;
+        handlePressEnd(DOT_TIME);
+      }
+    });
   </script>
 </body>
 </html>
