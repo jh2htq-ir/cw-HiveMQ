@@ -46,29 +46,33 @@
 
     .info { color: #888888; font-size: 13px; margin-bottom: 10px; width: 100%; max-width: 600px; box-sizing: border-box; }
     
-    /* iPad専用のパドル入力を安定させるための可視フォーカスエリア */
+    /* マイクアイコンや音声バーを出さない、キー入力専用のクリーンなフォーカスエリア */
     .paddle-focus-box {
       width: 100%;
       max-width: 600px;
       margin-bottom: 12px;
       box-sizing: border-box;
     }
-    #paddleInput {
+    #paddleFocusArea {
       width: 100%;
       background-color: #1a1a1a;
       color: #00FF00;
-      border: 2px dashed #00FF00;
+      border: 2px solid #00FF00;
       border-radius: 6px;
-      padding: 10px;
+      padding: 12px;
       font-family: 'Courier New', Courier, monospace;
       font-size: 14px;
       text-align: center;
       box-sizing: border-box;
       outline: none;
+      cursor: pointer;
+      user-select: none;
+      -webkit-user-select: none;
     }
-    #paddleInput:focus {
-      border-style: solid;
+    #paddleFocusArea:focus {
       background-color: #0a220a;
+      border-color: #00FF00;
+      box-shadow: 0 0 8px #00FF00;
     }
 
     #monitor { 
@@ -113,9 +117,9 @@
   
   <div class="info">Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
-  <!-- iPadでキー入力を確実に維持するための実体入力エリア -->
+  <!-- 音声バーやマイクが出ない、カスタムフォーカス受信用エリア（タブ移動等でキーを確実に捕捉） -->
   <div class="paddle-focus-box">
-    <input type="text" id="paddleInput" placeholder="⌨️ ここを1回タップしてキー入力を有効化してください">
+    <div id="paddleFocusArea" tabindex="0">🔌 ここを1回タップしてパドル入力を有効化してください</div>
   </div>
 
   <div id="monitor"></div>
@@ -380,7 +384,13 @@
     }, 10);
 
     let keyIsDown = false;
-    const paddleInput = document.getElementById('paddleInput');
+    const paddleFocusArea = document.getElementById('paddleFocusArea');
+
+    // タップされたらフォーカスを保持し、メッセージを更新
+    paddleFocusArea.addEventListener('click', () => {
+      paddleFocusArea.focus();
+      paddleFocusArea.textContent = "🟢 パドル入力有効中（常時受付中）";
+    });
 
     // 共通の打鍵処理
     function handleKeyDown(e) {
@@ -433,9 +443,9 @@
       }
     }
 
-    // 入力ボックス自体およびドキュメント全体でキー入力を確実に常時捕捉
-    paddleInput.addEventListener('keydown', handleKeyDown);
-    paddleInput.addEventListener('keyup', handleKeyUp);
+    // どのレイヤーでもキー入力を確実にキャッチ
+    paddleFocusArea.addEventListener('keydown', handleKeyDown);
+    paddleFocusArea.addEventListener('keyup', handleKeyUp);
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('keyup', handleKeyUp);
   </script>
