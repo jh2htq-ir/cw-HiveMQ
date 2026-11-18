@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (Simple Duration Keyer)</title>
+  <title>CW リアルタイム・モールス通信モニター (Simple Duration Keyer + Remote Sound)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
@@ -32,7 +32,6 @@
     #monitor::-webkit-scrollbar { width: 0px; background: transparent; }
     #status { margin-top: 15px; font-size: 16px; color: #FFFF00; }
 
-    /* 画面いっぱいの大きなパドルボタン */
     .key-container {
       display: flex;
       width: 100%;
@@ -78,7 +77,6 @@
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
-  <!-- シンプルな単一のキーボタン -->
   <div class="key-container">
     <div id="keyBtn" class="key-btn">KEY (TOUCH / CLICK)</div>
   </div>
@@ -102,8 +100,6 @@
     const DASH_TIME = DOT_TIME * 3;     
     const LETTER_GAP = DOT_TIME * 3;    
     const WORD_GAP = DOT_TIME * 7;      
-
-    // 短点と長点の判定しきい値（短点と長点の中間値）
     const THRESHOLD = (DOT_TIME + DASH_TIME) / 2;
 
     const connStatusEl = document.getElementById('connStatus');
@@ -240,6 +236,62 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
+    // --- 受信音を順番に再生するためのキュー処理 ---
+    let soundQueue = [];
+    let isPlayingQueue = false;
+
+    function playReceiveToneSequence(durations, callback) {
+      soundQueue.push({ durations, callback });
+      processSoundQueue();
+    }
+
+    function processSoundQueue() {
+      if (isPlayingQueue || soundQueue.length === 0) return;
+      isPlayingQueue = true;
+
+      let item = soundQueue.shift();
+      let durations = item.durations;
+      let index = 0;
+
+      function step() {
+        if (index >= durations.length) {
+          stopTone();
+          isPlayingQueue = false;
+          if (item.callback) item.callback();
+          setTimeout(processSoundQueue, 10);
+          return;
+        }
+
+        let dur = durations[index];
+        if (isNaN(dur)) {
+          index++;
+          step();
+          return;
+        }
+
+        if (index % 2 === 0) {
+          // 信号音（短点または長点）
+          startTone();
+          setTimeout(() => {
+            stopTone();
+            index++;
+            // 音符間のインターバル（1短点分）
+            setTimeout(step, DOT_TIME);
+          }, dur);
+        } else {
+          // 無音スペース
+          stopTone();
+          setTimeout(() => {
+            index++;
+            step();
+          }, dur);
+        }
+      }
+
+      step();
+    }
+
+    // --- 他局からのMQTTメッセージ受信処理（受信音の追加） ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
@@ -254,7 +306,7 @@
         senderID = senderID.trim();
         dataPart = dataPart.trim();
 
-        if (senderID === MACHINE_ID) return;
+        if (senderID === MACHINE_ID) return; // 自局の送信分は無視
 
         if (dataPart === "SPACE") {
           if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
@@ -264,10 +316,14 @@
         }
 
         let vals = dataPart.split(',');
+        let numericDurations = [];
         let remoteCode = "";
+
         for (let i = 0; i < vals.length; i++) {
           let dur = parseInt(vals[i]);
           if (isNaN(dur)) continue;
+          numericDurations.push(dur);
+
           if (i % 2 === 0) {
             if (dur < THRESHOLD) remoteCode += ".";
             else remoteCode += "-";
@@ -287,6 +343,11 @@
         if (remoteCode.length > 0) {
           let ch = morseTable[remoteCode];
           if (ch) updateMonitor(ch);
+        }
+
+        // 受信したデュレーションデータに合わせてサイドトーンを再生する
+        if (numericDurations.length > 0) {
+          playReceiveToneSequence(numericDurations);
         }
       });
     }
@@ -331,7 +392,7 @@
       }
     }, 10);
 
-    // --- 共通の打鍵処理（押した時間の長さで判定） ---
+    // --- 打鍵処理 ---
     function handlePressStart() {
       if (isTransmitting) return;
       isTransmitting = true;
@@ -357,7 +418,6 @@
       let duration = currentTime - signalStartTime;
       silenceStartTime = currentTime;
 
-      // 押していた時間に基づいて短点か長点を自動判定
       let symbol = duration < THRESHOLD ? "." : "-";
 
       currentCode += symbol;
@@ -373,7 +433,7 @@
       isTransmitting = false;
     }
 
-    // --- キーボード（Left Ctrl）の処理 ---
+    // --- キーボード（Left Ctrl） ---
     let keyIsDown = false;
     window.addEventListener('keydown', (e) => {
       if (e.code === 'ControlLeft') {
@@ -391,7 +451,7 @@
       }
     });
 
-    // --- 画面上のキーボタン設定 ---
+    // --- 画面キーボタン ---
     const keyBtn = document.getElementById('keyBtn');
 
     keyBtn.addEventListener('touchstart', (e) => {
