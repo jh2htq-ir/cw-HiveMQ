@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (Fix Receive Echo)</title>
+  <title>CW リアルタイム・モールス通信モニター (Fix Last Tone)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
@@ -65,7 +65,7 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ Clean Receive ]</h3>
+    <h3>Morse TRX [ Fix Last Tone ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
@@ -148,7 +148,6 @@
       }
     }
 
-    // 自局打鍵用のリアルタイム発振音開始
     function startTone() {
       if (isMuted) return;
       initAudio();
@@ -164,7 +163,6 @@
       }
     }
     
-    // 自局打鍵用の発振音停止
     function stopTone() {
       if (activeOsc) {
         try {
@@ -175,9 +173,9 @@
       }
     }
 
-    // 他局の受信音をスケジュール再生する関数（重複実行を完全に防ぐ1系統のみの再生）
     let lastPublishTime = 0;
 
+    // 受信音を最後まで確実に再生するスケジュール関数
     function playRemoteToneSequence(durations) {
       if (isMuted) return;
       if (isTransmitting || (Date.now() - lastPublishTime < 1000)) return;
@@ -189,8 +187,10 @@
 
       for (let i = 0; i < durations.length; i++) {
         let durSec = durations[i] / 1000.0;
+        if (isNaN(durSec) || durSec <= 0) continue;
 
         if (i % 2 === 0) {
+          // 信号音 (Dit / Dah)
           try {
             let osc = ctx.createOscillator();
             let gain = ctx.createGain();
@@ -203,6 +203,7 @@
           } catch(e){}
           scheduleTime += durSec;
         } else {
+          // 無音スペース
           scheduleTime += durSec;
         }
       }
@@ -257,7 +258,7 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 他局からのMQTTメッセージ受信処理（重複再生バグを完全に修正） ---
+    // --- 他局からのMQTTメッセージ受信処理 ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
@@ -270,7 +271,6 @@
         let senderID = msg.substring(0, colIdx).trim();
         let dataPart = msg.substring(colIdx + 1).trim();
 
-        // 自局IDからのメッセージは完全に無視
         if (senderID === MACHINE_ID) return;
 
         if (dataPart === "SPACE") {
@@ -302,11 +302,6 @@
                 remoteCode = "";
               }
             }
-            if (dur >= WORD_GAP) {
-              if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
-                updateMonitor(" ");
-              }
-            }
           }
         }
 
@@ -317,19 +312,18 @@
           }
         }
 
-        // ★修正点：文字のループ内ではなく、メッセージ受信ごとに「1回だけ」音声をスケジュール再生する
         if (numericDurations.length > 0) {
           playRemoteToneSequence(numericDurations);
         }
       });
     }
 
-    // --- 自局の無音判定ループ ---
+    // --- 自局の無音判定ループ（最後の短点・長点データを絶対に落とさないよう修正） ---
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
 
-      if (!isTransmitting && currentCode.length > 0 && (silenceDuration >= LETTER_GAP || silenceDuration > 300)) {
+      if (!isTransmitting && currentCode.length > 0 && silenceDuration >= LETTER_GAP) {
         let char = morseTable[currentCode];
         if (char) {
           updateMonitor(char);
@@ -346,6 +340,7 @@
           client.publish(TOPIC_TX_RX, mqttMessage);
         }
         durationHistory = "";
+        gapAdded = false;
       }
 
       if (!isTransmitting && !gapAdded && decodedText.length > 0 && silenceDuration >= WORD_GAP) {
@@ -359,11 +354,16 @@
           updateMonitor(" ");
         }
         gapAdded = true;
-        let spaceMessage = "[" + MACHINE_ID + ":SPACE]";
+        
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += silenceDuration;
+        let spaceMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
+        
         if (client && client.connected) {
           lastPublishTime = Date.now();
           client.publish(TOPIC_TX_RX, spaceMessage);
         }
+        durationHistory = "";
       }
     }, 10);
 
@@ -382,7 +382,6 @@
       startTone();
       signalStartTime = currentTime;
       silenceStartTime = 0;
-      gapAdded = false;
       lastStateChangeTime = currentTime;
     }
 
