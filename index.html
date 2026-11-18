@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (Fast & Reliable)</title>
+  <title>CW リアルタイム・モールス通信モニター (Fix Receive Echo)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
@@ -65,7 +65,7 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ Optimized Mode ]</h3>
+    <h3>Morse TRX [ Clean Receive ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
@@ -82,7 +82,7 @@
   </div>
 
   <script>
-    const MACHINE_ID = "iPad1"; 
+    const MACHINE_ID = "iPad1"; // 端末ID (Windows側は "PC1" など)
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
     const mqttOptions = {
@@ -95,8 +95,8 @@
     };
     const TOPIC_TX_RX = "cw/trx/durations"; 
 
-    // --- 13 WPM 設定 ---
-    const DOT_TIME = 92; 
+    // --- 12 WPM 設定 (短点 = 100ms) ---
+    const DOT_TIME = 100; 
     const DASH_TIME = DOT_TIME * 3;     
     const LETTER_GAP = DOT_TIME * 3;    
     const WORD_GAP = DOT_TIME * 7;      
@@ -136,7 +136,7 @@
     // --- Web Audio API (SideTone: 700Hz) ---
     const AudioContext = window.AudioContext || window.webkitAudioContext;
     let ctx = null;
-    let osc = null;
+    let activeOsc = null;
     let isMuted = true; 
 
     function initAudio() {
@@ -148,28 +148,63 @@
       }
     }
 
+    // 自局打鍵用のリアルタイム発振音開始
     function startTone() {
       if (isMuted) return;
       initAudio();
-      if (!osc) {
+      if (!activeOsc) {
         try {
-          osc = ctx.createOscillator(); 
-          osc.frequency.value = 700; 
-          osc.connect(ctx.destination); 
-          osc.start();
+          activeOsc = ctx.createOscillator();
+          activeOsc.frequency.value = 700;
+          activeOsc.connect(ctx.destination);
+          activeOsc.start();
         } catch(e) {
-          osc = null;
+          activeOsc = null;
         }
       }
     }
     
+    // 自局打鍵用の発振音停止
     function stopTone() {
-      if (osc) { 
-        try { 
-          osc.stop(); 
-          osc.disconnect();
+      if (activeOsc) {
+        try {
+          activeOsc.stop();
+          activeOsc.disconnect();
         } catch(e){}
-        osc = null; 
+        activeOsc = null;
+      }
+    }
+
+    // 他局の受信音をスケジュール再生する関数（重複実行を完全に防ぐ1系統のみの再生）
+    let lastPublishTime = 0;
+
+    function playRemoteToneSequence(durations) {
+      if (isMuted) return;
+      if (isTransmitting || (Date.now() - lastPublishTime < 1000)) return;
+
+      initAudio();
+
+      let now = ctx.currentTime;
+      let scheduleTime = now;
+
+      for (let i = 0; i < durations.length; i++) {
+        let durSec = durations[i] / 1000.0;
+
+        if (i % 2 === 0) {
+          try {
+            let osc = ctx.createOscillator();
+            let gain = ctx.createGain();
+            osc.frequency.value = 700;
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+
+            osc.start(scheduleTime);
+            osc.stop(scheduleTime + durSec);
+          } catch(e){}
+          scheduleTime += durSec;
+        } else {
+          scheduleTime += durSec;
+        }
       }
     }
 
@@ -210,10 +245,6 @@
 
     const monitorEl = document.getElementById('monitor'); 
     const currentCodeEl = document.getElementById('currentCode');
-    
-    const canvas = document.createElement('canvas'); 
-    const canvasCtx = canvas.getContext('2d');
-    canvasCtx.font = "20px 'Courier New', Courier, monospace";
 
     function updateMonitor(newChar) {
       if (newChar === "=") { 
@@ -221,53 +252,26 @@
       } else { 
         decodedText += newChar; 
       }
-
-      let lines = decodedText.split('\n'); 
-      let lastLine = lines[lines.length - 1];
-      const maxWidthLimit = (monitorEl.clientWidth - 30) * 0.90;
-
-      if (canvasCtx.measureText(lastLine).width > maxWidthLimit) {
-        lines[lines.length - 1] = "\n" + lastLine;
-        decodedText = lines.join('\n');
-      }
-
       decodedText = decodedText.replace(/\n\n+/g, '\n');
       monitorEl.textContent = decodedText;
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 高速かつリアルタイムな受信音再生エンジン ---
-    async function playFastTone(symbol) {
-      if (isMuted) return;
-      let duration = (symbol === ".") ? DOT_TIME : DASH_TIME;
-      startTone();
-      await new Promise(r => setTimeout(r, duration));
-      stopTone();
-      await new Promise(r => setTimeout(r, DOT_TIME));
-    }
-
-    async function playRemoteCode(codeStr) {
-      for (let i = 0; i < codeStr.length; i++) {
-        await playFastTone(codeStr[i]);
-      }
-    }
-
-    // --- 他局からのMQTTメッセージ受信処理 ---
+    // --- 他局からのMQTTメッセージ受信処理（重複再生バグを完全に修正） ---
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
-        let msg = payload.toString();
         
+        let msg = payload.toString();
         msg = msg.replace("[", "").replace("]", "");
         let colIdx = msg.indexOf(':');
         if (colIdx === -1) return;
 
-        let senderID = msg.substring(0, colIdx);
-        let dataPart = msg.substring(colIdx + 1);
-        senderID = senderID.trim();
-        dataPart = dataPart.trim();
+        let senderID = msg.substring(0, colIdx).trim();
+        let dataPart = msg.substring(colIdx + 1).trim();
 
-        if (senderID === MACHINE_ID) return; // 自局の送信分は無視
+        // 自局IDからのメッセージは完全に無視
+        if (senderID === MACHINE_ID) return;
 
         if (dataPart === "SPACE") {
           if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
@@ -277,23 +281,23 @@
         }
 
         let vals = dataPart.split(',');
+        let numericDurations = [];
         let remoteCode = "";
 
         for (let i = 0; i < vals.length; i++) {
           let dur = parseInt(vals[i]);
           if (isNaN(dur)) continue;
+          numericDurations.push(dur);
 
           if (i % 2 === 0) {
             let symbol = (dur < THRESHOLD) ? "." : "-";
             remoteCode += symbol;
           } else {
-            // 文字間隔 または 最後のデータに到達した場合
             if (dur >= LETTER_GAP || i === vals.length - 1) {
               if (remoteCode.length > 0) {
                 let ch = morseTable[remoteCode];
                 if (ch) {
                   updateMonitor(ch);
-                  playRemoteCode(remoteCode);
                 }
                 remoteCode = "";
               }
@@ -305,23 +309,26 @@
             }
           }
         }
-        // ループの最後に余ったコード（最後のEなど）の処理
+
         if (remoteCode.length > 0) {
           let ch = morseTable[remoteCode];
           if (ch) {
             updateMonitor(ch);
-            playRemoteCode(remoteCode);
           }
+        }
+
+        // ★修正点：文字のループ内ではなく、メッセージ受信ごとに「1回だけ」音声をスケジュール再生する
+        if (numericDurations.length > 0) {
+          playRemoteToneSequence(numericDurations);
         }
       });
     }
 
-    // --- 自局の無音判定ループ（最後の文字を取りこぼさないよう最適化） ---
+    // --- 自局の無音判定ループ ---
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
 
-      // 打っていなくて、コードが溜まっており、一定の無音時間が経過したら文字を確定して送信
       if (!isTransmitting && currentCode.length > 0 && (silenceDuration >= LETTER_GAP || silenceDuration > 300)) {
         let char = morseTable[currentCode];
         if (char) {
@@ -333,7 +340,9 @@
         if (durationHistory.length > 0) durationHistory += ",";
         durationHistory += silenceDuration;
         let mqttMessage = "[" + MACHINE_ID + ":" + durationHistory + "]";
+        
         if (client && client.connected) {
+          lastPublishTime = Date.now();
           client.publish(TOPIC_TX_RX, mqttMessage);
         }
         durationHistory = "";
@@ -352,6 +361,7 @@
         gapAdded = true;
         let spaceMessage = "[" + MACHINE_ID + ":SPACE]";
         if (client && client.connected) {
+          lastPublishTime = Date.now();
           client.publish(TOPIC_TX_RX, spaceMessage);
         }
       }
