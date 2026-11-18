@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>CW リアルタイム・モールス通信モニター (HiveMQ + USB Paddle)</title>
+  <title>CW リアルタイム・モールス通信モニター (Stable Adaptive Engine)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; }
     
@@ -37,20 +37,19 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ HiveMQ Direct ]</h3>
+    <h3>Morse TRX [ Stable Adaptive Engine ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">Use your USB Paddle Interface (Sends Left Ctrl key). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Use your Key/Paddle (Sends Left Ctrl key). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
 
   <script>
-    // --- ESP32側およびパドル設定と同期したパラメータ ---
     const MACHINE_ID = "PC1"; 
     
     const mqttServer = "wss://25ae3c91279347b4a78afe6483b82bfd.s1.eu.hivemq.cloud:8884/mqtt";
@@ -64,10 +63,9 @@
     };
     const TOPIC_TX_RX = "cw/trx/durations"; 
 
-    const DOT_TIME = 50; 
-    const DASH_TIME = DOT_TIME * 3;     
-    const LETTER_GAP = DOT_TIME * 3;    
-    const WORD_GAP = DOT_TIME * 7;      
+    // 初期推定値（標準的な速度）
+    let estimatedDot = 60;
+    let estimatedDash = 180;
 
     const connStatusEl = document.getElementById('connStatus');
 
@@ -133,7 +131,6 @@
       }
     });
 
-    // --- モニタークリア機能の追加 ---
     const clearBtn = document.getElementById('clearBtn');
     clearBtn.addEventListener('click', () => {
       decodedText = "";
@@ -141,10 +138,6 @@
       currentCode = "";
       currentCodeEl.textContent = "";
     });
-
-    // --- モールス信号・デコード設定 ---
-    let estimatedDotTime = DOT_TIME;   
-    let estimatedDashTime = DASH_TIME; 
 
     const morseTable = {
       ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G", "....": "H", "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O", ".--.": "P", "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X", "-.--": "Y", "--..": "Z", ".----": "1", "..---": "2", "...--": "3", "....-": "4", ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9", "-----": "0", ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/", ".--.-.": "@", "-....-": "-", "-...-": "=", ".-.-.": "+", "...-.-": ";"
@@ -187,21 +180,17 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 他局からのMQTTメッセージ受信処理 ---
+    // MQTT受信処理
     if (client) {
       client.on('message', (topic, payload) => {
         if (topic !== TOPIC_TX_RX) return;
         let msg = payload.toString();
-        
         msg = msg.replace("[", "").replace("]", "");
         let colIdx = msg.indexOf(':');
         if (colIdx === -1) return;
 
         let senderID = msg.substring(0, colIdx);
         let dataPart = msg.substring(colIdx + 1);
-        senderID.trim();
-        dataPart.trim();
-
         if (senderID === MACHINE_ID) return;
 
         if (dataPart === "SPACE") {
@@ -217,15 +206,18 @@
           let dur = parseInt(vals[i]);
           if (isNaN(dur)) continue;
           if (i % 2 === 0) {
-            if (dur < (DASH_TIME - (DOT_TIME / 2))) remoteCode += ".";
+            let threshold = (estimatedDot + estimatedDash) / 2;
+            if (dur < threshold) remoteCode += ".";
             else remoteCode += "-";
           } else {
-            if (dur >= LETTER_GAP && remoteCode.length > 0) {
+            let letterGapThresh = estimatedDot * 2.8;
+            let wordGapThresh = estimatedDot * 5.5;
+            if (dur >= letterGapThresh && remoteCode.length > 0) {
               let ch = morseTable[remoteCode];
               if (ch) updateMonitor(ch);
               remoteCode = "";
             }
-            if (dur >= WORD_GAP) {
+            if (dur >= wordGapThresh) {
               if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
                 updateMonitor(" ");
               }
@@ -239,15 +231,21 @@
       });
     }
 
-    // --- 自局の打鍵・無音判定ループ ---
+    // 自局の無音・文字区切り判定ループ
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
 
-      if (!isTransmitting && currentCode.length > 0 && silenceDuration >= LETTER_GAP) {
+      let letterGapLimit = Math.max(estimatedDot * 3.2, 120);
+      let wordGapLimit = Math.max(estimatedDot * 6.5, 300);
+
+      if (!isTransmitting && currentCode.length > 0 && silenceDuration >= letterGapLimit) {
         let char = morseTable[currentCode];
         if (char) {
           updateMonitor(char);
+        } else if (currentCode.length > 0) {
+          // 未知のコードの場合は「?」またはそのまま表示する代わりに軽くクリア
+          updateMonitor("?");
         }
         currentCode = "";
         currentCodeEl.textContent = "";
@@ -261,7 +259,7 @@
         durationHistory = "";
       }
 
-      if (!isTransmitting && !gapAdded && decodedText.length > 0 && silenceDuration >= WORD_GAP) {
+      if (!isTransmitting && !gapAdded && decodedText.length > 0 && silenceDuration >= wordGapLimit) {
         if (currentCode.length > 0) {
           let char = morseTable[currentCode];
           if (char) updateMonitor(char);
@@ -311,18 +309,38 @@
         let duration = currentTime - signalStartTime;
         silenceStartTime = currentTime;
 
-        let threshold = (DOT_TIME + DASH_TIME) / 2;
+        // 誤打鍵やノイズ（10ms未満）は無視
+        if (duration < 10) return;
+
+        // しきい値による判定
+        let threshold = (estimatedDot + estimatedDash) / 2;
         let symbol = duration < threshold ? "." : "-";
 
-        estimatedDotTime = estimatedDotTime * 0.85 + duration * 0.15;
+        // 【重要】学習の暴走を防ぐクランプ処理と保守的な適応
+        if (symbol === ".") {
+          // 短点と判定された場合、極端に長すぎない範囲で学習
+          if (duration < estimatedDash * 0.7) {
+            estimatedDot = estimatedDot * 0.9 + duration * 0.1;
+          }
+        } else {
+          // 長点と判定された場合、短点より十分に長い場合のみ学習
+          if (duration > estimatedDot * 1.5) {
+            estimatedDash = estimatedDash * 0.9 + duration * 0.1;
+          }
+        }
+
+        // 推定値が異常な値に張り付かないように上下限を強制制限（クランプ）
+        estimatedDot = Math.max(35, Math.min(estimatedDot, 150));
+        estimatedDash = Math.max(estimatedDot * 2.0, Math.min(estimatedDash, estimatedDot * 4.5));
+
         currentCode += symbol;
-        if (currentCode.length > 6) currentCode = "";
+        if (currentCode.length > 6) {
+          currentCode = ""; // 6文字を超えたらゴミとみなしてリセット
+        }
         currentCodeEl.textContent = currentCode;
 
-        if (duration >= 10) {
-          if (durationHistory.length > 0) durationHistory += ",";
-          durationHistory += duration;
-        }
+        if (durationHistory.length > 0) durationHistory += ",";
+        durationHistory += duration;
 
         lastStateChangeTime = currentTime;
         isTransmitting = false;
