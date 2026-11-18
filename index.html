@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CW リアルタイム・モールス通信モニター (Fast Sound Mode)</title>
+  <title>CW リアルタイム・モールス通信モニター (Fast & Reliable)</title>
   <style>
     body { background-color: #121212; color: #00FF00; font-family: 'Courier New', Courier, monospace; padding: 20px; margin: 0; box-sizing: border-box; }
     
@@ -65,14 +65,14 @@
 <body>
 
   <div class="header-container">
-    <h3>Morse TRX [ Fast Sound Mode ]</h3>
+    <h3>Morse TRX [ Optimized Mode ]</h3>
     <div class="header-buttons">
       <button id="clearBtn" class="action-btn clear-btn">🗑️ Clear</button>
       <button id="toggleSoundBtn" class="action-btn muted">🔇 Sound: OFF</button>
     </div>
   </div>
   
-  <div class="info">Touch/Click & Hold key below (Short=Dit, Long=Dah). Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
+  <div class="info">Touch/Click & Hold key below. Status: <span id="connStatus" style="color:#FFAA00;">Connecting...</span></div>
   
   <div id="monitor"></div>
   <div id="status">Transmitting... <span id="currentCode"></span></div>
@@ -236,20 +236,19 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // --- 受信したモールス符号（. と -）をサクサク再生する高速サウンド関数 ---
-    async function playSymbolTone(symbol) {
+    // --- 高速かつリアルタイムな受信音再生エンジン ---
+    async function playFastTone(symbol) {
       if (isMuted) return;
       let duration = (symbol === ".") ? DOT_TIME : DASH_TIME;
       startTone();
-      await new Promise(resolve => setTimeout(resolve, duration));
+      await new Promise(r => setTimeout(r, duration));
       stopTone();
-      // 符号間の短いウェイト
-      await new Promise(resolve => setTimeout(resolve, DOT_TIME));
+      await new Promise(r => setTimeout(r, DOT_TIME));
     }
 
-    async function playCodeSequence(codeStr) {
+    async function playRemoteCode(codeStr) {
       for (let i = 0; i < codeStr.length; i++) {
-        await playSymbolTone(codeStr[i]);
+        await playFastTone(codeStr[i]);
       }
     }
 
@@ -288,13 +287,16 @@
             let symbol = (dur < THRESHOLD) ? "." : "-";
             remoteCode += symbol;
           } else {
-            if (dur >= LETTER_GAP && remoteCode.length > 0) {
-              let ch = morseTable[remoteCode];
-              if (ch) {
-                updateMonitor(ch);
-                playCodeSequence(remoteCode); // 受信した符号に合わせて音を鳴らす
+            // 文字間隔 または 最後のデータに到達した場合
+            if (dur >= LETTER_GAP || i === vals.length - 1) {
+              if (remoteCode.length > 0) {
+                let ch = morseTable[remoteCode];
+                if (ch) {
+                  updateMonitor(ch);
+                  playRemoteCode(remoteCode);
+                }
+                remoteCode = "";
               }
-              remoteCode = "";
             }
             if (dur >= WORD_GAP) {
               if (decodedText.length > 0 && !decodedText.endsWith(" ")) {
@@ -303,22 +305,24 @@
             }
           }
         }
+        // ループの最後に余ったコード（最後のEなど）の処理
         if (remoteCode.length > 0) {
           let ch = morseTable[remoteCode];
           if (ch) {
             updateMonitor(ch);
-            playCodeSequence(remoteCode);
+            playRemoteCode(remoteCode);
           }
         }
       });
     }
 
-    // --- 自局の無音判定ループ ---
+    // --- 自局の無音判定ループ（最後の文字を取りこぼさないよう最適化） ---
     setInterval(() => {
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
 
-      if (!isTransmitting && currentCode.length > 0 && silenceDuration >= LETTER_GAP) {
+      // 打っていなくて、コードが溜まっており、一定の無音時間が経過したら文字を確定して送信
+      if (!isTransmitting && currentCode.length > 0 && (silenceDuration >= LETTER_GAP || silenceDuration > 300)) {
         let char = morseTable[currentCode];
         if (char) {
           updateMonitor(char);
