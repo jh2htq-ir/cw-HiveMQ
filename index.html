@@ -67,6 +67,11 @@
     let estimatedDot = 60;
     let estimatedDash = 180;
 
+    // Soundボタン状態:
+    // ON (false)  -> 送信・受信ともにモニターとCW音が動作
+    // OFF (true)  -> 送信CW音は消えるが、受信CW音は鳴り、送信/受信モニターは動作
+    let isMuted = true;
+
     const connStatusEl = document.getElementById('connStatus');
 
     let client;
@@ -98,14 +103,20 @@
       });
     }
 
-    // --- Web Audio API (SideTone: 700Hz) ---
+    // --- Web Audio API (SideTone & RX CW Tone: 700Hz) ---
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     let osc = null;
-    let isMuted = true; 
 
+    function ensureAudioContext() {
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+    }
+
+    // 送信CW音開始（Sound ON のときのみ鳴らす。Sound OFF 時は鳴らさない）
     function startTone() {
       if (isMuted) return;
-      if (ctx.state === 'suspended') { ctx.resume(); }
+      ensureAudioContext();
       if (!osc) {
         osc = ctx.createOscillator(); 
         osc.frequency.value = 700; 
@@ -118,9 +129,9 @@
       if (osc) { osc.stop(); osc = null; }
     }
 
-    // クリックノイズ防止フェード付きの単発トーン再生
+    // 受信CW音再生（Sound ON でも Sound OFF でも鳴らす）
     function playToneDuration(durationMs) {
-      if (ctx.state === 'suspended') { ctx.resume(); }
+      ensureAudioContext();
       let now = ctx.currentTime;
       let o = ctx.createOscillator();
       let g = ctx.createGain();
@@ -140,22 +151,36 @@
       o.stop(now + (durationMs / 1000));
     }
 
-    // 単語全体（文字列）をモールス音に変換して順番に再生する関数
-    function playWordMorse(word) {
-      let dotDuration = estimatedDot;
-      let dashDuration = estimatedDash;
-      let elementGap = estimatedDot;   // 文字内の符号間無音
-      let letterGap = estimatedDot * 3; // 文字間の無音
+    // --- 音声再生キュー（バッファ）管理 ---
+    let cwAudioQueue = [];
+    let isPlayingQueue = false;
 
-      let delay = 0;
-      for (let i = 0; i < word.length; i++) {
-        let char = word[i].toUpperCase();
-        let codeStr = reverseMorseTable[char];
-        if (!codeStr) continue;
+    // 1文字分のモールス音を再生し、完了したらPromiseを返す
+    function playSingleCharMorse(char) {
+      return new Promise((resolve) => {
+        // スペース（単語区切り）の場合は、追加の単語間無音（約4短点分）を待つ
+        if (char === " ") {
+          setTimeout(resolve, estimatedDot * 4);
+          return;
+        }
+
+        const upperChar = char.toUpperCase();
+        const codeStr = reverseMorseTable[upperChar];
+        if (!codeStr) {
+          resolve();
+          return;
+        }
+
+        const dotDuration = estimatedDot;
+        const dashDuration = estimatedDash;
+        const elementGap = estimatedDot;    // 文字内の符号間無音
+        const letterGap = estimatedDot * 3; // 文字間の無音
+
+        let delay = 0;
 
         for (let j = 0; j < codeStr.length; j++) {
-          let symbol = codeStr[j];
-          let dur = (symbol === '.') ? dotDuration : dashDuration;
+          const symbol = codeStr[j];
+          const dur = (symbol === '.') ? dotDuration : dashDuration;
 
           setTimeout(() => {
             playToneDuration(dur);
@@ -163,18 +188,44 @@
 
           delay += dur + elementGap;
         }
-        // 文字と文字の間隔を追加
-        delay += letterGap - elementGap;
-      }
+
+        // 次の文字へ移るまでの文字間ギャップ分待ってから完了
+        const totalWait = Math.max(0, delay - elementGap + letterGap);
+        setTimeout(resolve, totalWait);
+      });
     }
 
+    // キューに溜まった文字を先頭から1つずつ順番に再生するループ
+    async function processAudioQueue() {
+      if (isPlayingQueue) return;
+      isPlayingQueue = true;
+
+      while (cwAudioQueue.length > 0) {
+        const ch = cwAudioQueue.shift();
+        await playSingleCharMorse(ch);
+      }
+
+      isPlayingQueue = false;
+    }
+
+    // 単語（および単語区切りスペース）を再生キューへ積む
+    function enqueueWordMorse(word) {
+      for (let i = 0; i < word.length; i++) {
+        cwAudioQueue.push(word[i]);
+      }
+      cwAudioQueue.push(" "); // 単語の後ろに区切り間隔を入れる
+      processAudioQueue();
+    }
+
+    // Sound ON / OFF 切替ボタン（1つ）
     const toggleSoundBtn = document.getElementById('toggleSoundBtn');
     toggleSoundBtn.addEventListener('click', () => {
+      ensureAudioContext();
       isMuted = !isMuted;
       if (isMuted) {
         toggleSoundBtn.textContent = "🔇 Sound: OFF";
         toggleSoundBtn.classList.add('muted');
-        stopTone();
+        stopTone(); // Sound OFF に切り替えた際、鳴っている送信CW音を停止
       } else {
         toggleSoundBtn.textContent = "🔊 Sound: ON";
         toggleSoundBtn.classList.remove('muted');
@@ -188,6 +239,7 @@
       currentCode = "";
       currentCodeEl.textContent = "";
       incomingWordBuffer = "";
+      cwAudioQueue = []; // 再生待ちバッファもクリア
     });
 
     const morseTable = {
@@ -239,14 +291,14 @@
       monitorEl.scrollTop = monitorEl.scrollHeight;
     }
 
-    // 単語が確定したときに呼ばれる関数（モニター出力 ＆ まとめて音声再生）
+    // 単語が確定したときに呼ばれる関数（モニター出力 ＆ 再生キューへ投入）
     function commitIncomingWord() {
       if (incomingWordBuffer.length > 0) {
         for (let i = 0; i < incomingWordBuffer.length; i++) {
           updateMonitor(incomingWordBuffer[i]);
         }
-        // まとめて音を鳴らす
-        playWordMorse(incomingWordBuffer);
+        // 再生キューに積んで重ならないよう順番に鳴らす
+        enqueueWordMorse(incomingWordBuffer);
         incomingWordBuffer = "";
       }
     }
@@ -310,7 +362,7 @@
       let currentTime = Date.now();
       let silenceDuration = currentTime - silenceStartTime;
 
-      let letterGapLimit = Math.max(estimatedDot * 2.2, 120); // 3.2, 120 を修正
+      let letterGapLimit = Math.max(estimatedDot * 2.2, 120);
       let wordGapLimit = Math.max(estimatedDot * 6.5, 300);
 
       if (!isTransmitting && currentCode.length > 0 && silenceDuration >= letterGapLimit) {
@@ -366,7 +418,7 @@
           durationHistory += "," + duration;
         }
 
-        startTone();
+        startTone(); // Sound ON のみ送信CW音が鳴る
         signalStartTime = currentTime;
         silenceStartTime = 0;
         gapAdded = false;
