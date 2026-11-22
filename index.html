@@ -133,34 +133,42 @@
       if (osc) { osc.stop(); osc = null; }
     }
 
-    // 受信CW音を再生し、再生完了まで待つ Promise を返す
+    // 受信CW音を再生し、再生完了まで待つ Promise を返す（ポップノイズ対策版）
     function playToneDuration(durationMs) {
       return new Promise(async (resolve) => {
         if (ctx.state === 'suspended') {
           await ctx.resume();
         }
-        let now = ctx.currentTime;
-        let durSec = Math.max(durationMs / 1000, 0.015);
-        let rampSec = Math.min(0.005, durSec * 0.25);
 
-        let o = ctx.createOscillator();
-        let g = ctx.createGain();
+        const now = ctx.currentTime;
+        const durSec = Math.max(durationMs / 1000, 0.02); // 極端に短い符号の潰れ防止
+        const rampSec = Math.min(0.006, durSec * 0.3);    // 立ち上がり・立ち下がり（最大6ms）
+        const peakGain = 0.2;
+
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
 
         o.type = 'sine';
         o.frequency.setValueAtTime(700, now);
 
-        g.gain.setValueAtTime(0, now);
-        g.gain.linearRampToValueAtTime(0.3, now + rampSec);
-        g.gain.setValueAtTime(0.3, Math.max(now + rampSec, now + durSec - rampSec));
-        g.gain.linearRampToValueAtTime(0, now + durSec);
+        // 0.0001 -> peakGain -> 0.0001 まで滑らかに変化させる
+        g.gain.setValueAtTime(0.0001, now);
+        g.gain.linearRampToValueAtTime(peakGain, now + rampSec);
+        g.gain.setValueAtTime(peakGain, Math.max(now + rampSec, now + durSec - rampSec));
+        g.gain.exponentialRampToValueAtTime(0.0001, now + durSec);
 
         o.connect(g);
         g.connect(ctx.destination);
 
         o.start(now);
-        o.stop(now + durSec);
+        // ゲインがほぼ0になった後に停止し、プチ音を防止
+        o.stop(now + durSec + 0.005);
 
         o.onended = () => {
+          try {
+            o.disconnect();
+            g.disconnect();
+          } catch (_) {}
           resolve();
         };
       });
